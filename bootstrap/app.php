@@ -18,6 +18,11 @@ return Application::configure(basePath: dirname(__DIR__))
             'ensure.region.match' => EnsureRegionMatchesUser::class,
             'quota.check'          => EnsureUsageQuota::class, // ✅ Add this line
         ]);
+        
+        // Enable CORS for API routes
+        $middleware->api(prepend: [
+            \Illuminate\Http\Middleware\HandleCors::class,
+        ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {
         //
