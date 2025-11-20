@@ -4,9 +4,14 @@
 @section('content')
 
     <div class="d-flex justify-content-between align-items-center mb-4">
-        <h2 class="fw-bold text-primary"><i class="fas fa-brain me-2"></i>AI Engines</h2>
-        <a href="{{ route('admin.ai-engines.create') }}" class="btn btn-success">
-            <i class="fas fa-plus-circle"></i> Add New Engine
+        <div>
+            <h2 class="fw-bold mb-1" style="color: #1e293b;">
+                <i class="fas fa-brain me-2" style="color: #6366f1;"></i>AI Engines
+            </h2>
+            <p class="text-muted mb-0" style="font-size: 0.9rem;">Manage and monitor AI engine configurations</p>
+        </div>
+        <a href="{{ route('admin.ai-engines.create') }}" class="btn btn-primary">
+            <i class="fas fa-plus-circle me-2"></i> Add New Engine
         </a>
     </div>
 

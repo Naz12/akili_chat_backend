@@ -155,7 +155,6 @@ class AIEngineAdminController extends Controller
                 "Authorization: Bearer {$apiKey}",
                 'Content-Type: application/json',
             ],
-            CURLOPT_CAINFO => "C:/xampp 8.2/ssl/cacert.pem", // ⚠️ Your SSL cert
         ]);
     
         $response = curl_exec($ch);

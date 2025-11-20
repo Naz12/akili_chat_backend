@@ -13,15 +13,20 @@ class Plan extends Model
         'daily_message_limit',
         'engine_id', 
         'ads_enabled',
+        'is_active',
+        'is_default',
         'region',
         'currency',
         'image_url',
         'description',
         'tag',
+        'trial_days',
     ];
 
     protected $casts = [
         'ads_enabled' => 'boolean',
+        'is_active' => 'boolean',
+        'is_default' => 'boolean',
     ];
 
     

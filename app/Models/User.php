@@ -111,6 +111,11 @@ class User extends Authenticatable implements JWTSubject
     {
         return $this->hasMany(ChatMessage::class);
     }
+
+    public function tokenUsages()
+    {
+        return $this->hasMany(TokenUsage::class);
+    }
     
 
     public function sendPasswordResetNotification($token)

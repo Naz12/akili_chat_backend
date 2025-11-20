@@ -41,15 +41,19 @@ Route::prefix('v1')->group(function () {
                     Route::get('/user/has-subscription', [SubscriptionApiController::class, 'hasSubscription']);
 
                     // 💬 AI Chat + Chat History
-                    Route::prefix('chat')->middleware(['throttle:60,1', 'quota.check'])->group(function () {
-                        Route::post('/', [AIChatApiController::class, 'handleChat']); // POST /chat
+                    Route::prefix('chat')->middleware(['throttle:60,1'])->group(function () {
+                        // Only apply quota check to chat creation
+                        Route::post('/', [AIChatApiController::class, 'handleChat'])
+                            ->middleware('quota.check'); // POST /chat
 
-                        // Chat sessions history (clean and separated controller)
+                        // Chat sessions history (no quota check needed for viewing history)
                         Route::get('/sessions', [AiChatHistoryApiController::class, 'sessions']);
                         Route::get('/messages/{sessionId}', [AiChatHistoryApiController::class, 'messages']);
                         Route::put('/sessions/{sessionId}', [AiChatHistoryApiController::class, 'rename']);
                         Route::delete('/sessions/{sessionId}', [AiChatHistoryApiController::class, 'destroy']);
-                        Route::post('/upload', [AIChatApiController::class, 'uploadAttachment']);
+                        
+                        Route::post('/upload', [AIChatApiController::class, 'uploadAttachment'])
+                            ->middleware('quota.check');
                     });
 
                     // 📊 Token Usage

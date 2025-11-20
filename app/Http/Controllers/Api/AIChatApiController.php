@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use Carbon\Carbon;
 use App\Models\Plan;
+use App\Models\AIEngine;
 use App\Models\TokenUsage;
 use App\Models\ChatMessage;
 use App\Models\ChatSession;
@@ -28,27 +29,44 @@ class AIChatApiController extends Controller
      */
     public function handleChat(Request $request, UsageValidatorService $usageValidator)
     {
-        $user   = $request->user();
+        try {
+            Log::info('=== Chat Request Started ===', [
+                'user_id' => $request->user()?->id,
+                'user_region' => $request->user()?->region,
+                'message_length' => strlen($request->input('message', '')),
+                'has_session_id' => !empty($request->input('session_id')),
+            ]);
+            
+            $user   = $request->user();
 
-        // ✅ Prevent execution if quota failed
-        $quotaResult = $usageValidator->checkQuota($user);   // full check
-        if ($quotaResult['error']) {
-            return response()->json([
-                'message'  => [
-                    'role'    => 'assistant',
-                    'content' => $quotaResult['message'],
-                ],
-                'redirect' => '/plans',
-            ], 200);   // 200 so chat UI treats it as a normal reply
-        }
+            // ✅ Prevent execution if quota failed
+            $quotaResult = $usageValidator->checkQuota($user);   // full check
+            if ($quotaResult['error']) {
+                Log::warning('Quota check failed', $quotaResult);
+                return response()->json([
+                    'message'  => [
+                        'role'    => 'assistant',
+                        'content' => $quotaResult['message'],
+                    ],
+                    'redirect' => '/plans',
+                ], 200);   // 200 so chat UI treats it as a normal reply
+            }
 
         $prompt = (string) $request->input('message', '');
         $file   = $request->input('attachment_url'); // may be null
 
         // 🔐 subscription / engine checks -----------------------------------
-        $plan   = $user->active_subscription?->plan ?? Plan::where('is_default', true)->first();
-        $engine = $plan?->aiEngine;
+        $subscription = $user->active_subscription;
+        $plan = $subscription?->plan ?? Plan::where('is_default', true)->where('is_active', true)->first();
+        
+        if (!$plan) {
+            Log::error('No plan available for user', ['user_id' => $user->id]);
+            return response()->json(['error' => 'No subscription plan available. Please contact support.'], 500);
+        }
+        
+        $engine = $plan->aiEngine;
         if (!$engine || !$engine->is_active) {
+            Log::error('No active AI engine', ['plan_id' => $plan->id, 'engine_id' => $plan->engine_id]);
             return response()->json(['error' => 'No active AI engine available'], 500);
         }
         try {
@@ -121,25 +139,90 @@ class AIChatApiController extends Controller
         }
 
         // 🚀 send -----------------------------------------------------------
-        $payload = [
-            'model'    => $engine->version,
-            'messages' => $messages,
-        ];
-        Log::info('Sending to OpenAI', ['model' => $engine->version]);
+        $isAIManager = stripos($engine->provider, 'AI Manager') !== false;
+        
+        if ($isAIManager) {
+            // AI Manager format
+            $payload = [
+                'messages' => $messages,
+                'model' => $engine->version, // e.g., ollama:llama3
+                'response_format' => 'text',
+            ];
+            Log::info('Sending to AI Manager', ['model' => $engine->version, 'provider' => $engine->provider]);
             $res = Http::withHeaders([
-                    'Authorization' => "Bearer $apiKey",
-                    'Content-Type'  => 'application/json',
-                ])->post($engine->api_url, $payload);
-
-    
+                'X-API-KEY' => $apiKey,
+                'Content-Type' => 'application/json',
+                'Accept' => 'application/json',
+            ])->timeout(60)->post($engine->api_url, $payload);
+        } else {
+            // OpenAI format
+            $payload = [
+                'model'    => $engine->version,
+                'messages' => $messages,
+            ];
+            Log::info('Sending to OpenAI', ['model' => $engine->version]);
+            $res = Http::withHeaders([
+                'Authorization' => "Bearer $apiKey",
+                'Content-Type'  => 'application/json',
+            ])->timeout(60)->post($engine->api_url, $payload);
+        }
 
         if ($res->failed()) {
-            Log::error('AI error', ['body' => $res->body()]);
-            return response()->json(['error' => 'AI call failed'], 500);
+            Log::error('AI request failed', [
+                'provider' => $engine->provider,
+                'status' => $res->status(),
+                'body' => $res->body(),
+            ]);
+            
+            // Try fallback engine
+            $fallbackEngine = AIEngine::where('is_active', true)
+                ->where('is_fallback', true)
+                ->orderBy('priority_order')
+                ->first();
+            
+            if ($fallbackEngine && $fallbackEngine->id !== $engine->id) {
+                Log::info('Trying fallback engine', ['fallback' => $fallbackEngine->name]);
+                
+                try {
+                    $fallbackKey = Crypt::decryptString($fallbackEngine->api_key);
+                    $fallbackPayload = [
+                        'model' => $fallbackEngine->version,
+                        'messages' => $messages,
+                    ];
+                    
+                    $fallbackRes = Http::withHeaders([
+                        'Authorization' => "Bearer $fallbackKey",
+                        'Content-Type' => 'application/json',
+                    ])->timeout(60)->post($fallbackEngine->api_url, $fallbackPayload);
+                    
+                    if ($fallbackRes->successful()) {
+                        $res = $fallbackRes;
+                        $engine = $fallbackEngine; // Update engine reference for token tracking
+                        Log::info('Fallback successful', ['engine' => $engine->name]);
+                    } else {
+                        return response()->json(['error' => 'Both primary and fallback AI services failed'], 500);
+                    }
+                } catch (\Exception $e) {
+                    Log::error('Fallback failed', ['error' => $e->getMessage()]);
+                    return response()->json(['error' => 'AI service unavailable'], 500);
+                }
+            } else {
+                return response()->json(['error' => 'AI service unavailable'], 500);
+            }
         }
 
         $data  = $res->json();
-        $reply = $data['choices'][0]['message']['content'] ?? '[No reply]';
+        
+        // Parse response based on provider
+        if ($isAIManager && isset($data['data']['content'])) {
+            // AI Manager response format
+            $reply = is_string($data['data']['content']) 
+                ? $data['data']['content'] 
+                : ($data['data']['raw'] ?? '[No reply]');
+        } else {
+            // OpenAI response format
+            $reply = $data['choices'][0]['message']['content'] ?? '[No reply]';
+        }
 
         // 💾 persist messages ---------------------------------------------
         if ($file) {
@@ -168,7 +251,6 @@ class AIChatApiController extends Controller
 
         // 📊 token usage (optional)
         if (isset($data['usage'])) {
-            $subscription = $user->active_subscription;
             TokenUsage::create([
                 'user_id'       => $user->id,
                 'chat_session_id' => $session->id,
@@ -183,6 +265,15 @@ class AIChatApiController extends Controller
             'session_id' => $session->id,
             'message'    => [ 'role' => 'assistant', 'content' => $reply ],
         ]);
+        } catch (\Throwable $e) {
+            Log::error('Chat request failed', [
+                'error' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            return response()->json(['error' => 'An error occurred: ' . $e->getMessage()], 500);
+        }
     }
     
     public function uploadAttachment(Request $request)

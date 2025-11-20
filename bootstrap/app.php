@@ -19,12 +19,28 @@ return Application::configure(basePath: dirname(__DIR__))
             'quota.check'          => EnsureUsageQuota::class, // ✅ Add this line
         ]);
         
-        // Enable CORS for API routes
+        // Enable CORS for API routes - must be first to handle OPTIONS requests
         $middleware->api(prepend: [
             \Illuminate\Http\Middleware\HandleCors::class,
         ]);
+        
+        // Prevent redirects for unauthenticated API requests
+        $middleware->redirectGuestsTo(function ($request) {
+            if ($request->is('api/*')) {
+                return null; // Don't redirect API requests
+            }
+            return route('login');
+        });
     })
     ->withExceptions(function (Exceptions $exceptions) {
-        //
+        // Handle unauthenticated exceptions for API routes
+        $exceptions->renderable(function (\Illuminate\Auth\AuthenticationException $e, $request) {
+            if ($request->is('api/*')) {
+                return response()->json([
+                    'error' => 'Unauthenticated',
+                    'message' => 'Authentication required'
+                ], 401);
+            }
+        });
     })
     ->create();
