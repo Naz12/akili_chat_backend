@@ -1,0 +1,24 @@
+---
+alwaysApply: true
+---
+# Laravel Project Rules for Cursor IDE
+
+## 1. CORS HEADERS - SINGLE SOURCE OF TRUTH
+- NEVER add CORS headers in multiple places (index.php, middleware, controllers)
+- Use ONLY the AddCorsHeaders middleware for CORS
+- Always check if headers already exist before adding: `if (!$response->headers->has('Access-Control-Allow-Origin'))`
+- CORS headers MUST be added to ALL responses, including error responses (500, 404, 422)
+- Handle OPTIONS preflight requests immediately in middleware, return 200/204
+- Test CORS in browser, not just curl (curl doesn't enforce CORS)
+
+
+
+## ADDITIONAL GUIDELINES
+- Keep solutions simple - avoid overengineering
+- Follow existing code patterns in the project
+- Test endpoints with curl before assuming they work
+- When fixing errors, ensure CORS headers are still present
+- Use consistent file/folder naming conventions
+- Document complex logic with comments
+- Prefer Laravel's built-in features over custom solutions when possible
+
