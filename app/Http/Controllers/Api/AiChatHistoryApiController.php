@@ -17,20 +17,35 @@ class AiChatHistoryApiController extends Controller
      */
     public function sessions(Request $request)
     {
-        $user = $request->user();
-        $withMessages = $request->boolean('with_messages');
-    
-        $query = ChatSession::with($withMessages ? ['messages' => function ($q) {
-            $q->select('id', 'chat_session_id', 'role', 'content', 'created_at')
-              ->orderBy('created_at');
-        }] : [])
-        ->where('user_id', $user->id)
-        ->latest()
-        ->take(10); // ✅ Limit to 10 most recent sessions
-    
-        $sessions = $query->get(['id', 'title', 'created_at']);
-    
-        return response()->json($sessions);
+        try {
+            $user = $request->user();
+            
+            if (!$user) {
+                return response()->json(['error' => 'Unauthenticated'], 401);
+            }
+            
+            $withMessages = $request->boolean('with_messages');
+        
+            $query = ChatSession::with($withMessages ? ['messages' => function ($q) {
+                $q->select('id', 'chat_session_id', 'role', 'content', 'created_at')
+                  ->orderBy('created_at');
+            }] : [])
+            ->where('user_id', $user->id)
+            ->latest()
+            ->take(10); // ✅ Limit to 10 most recent sessions
+        
+            $sessions = $query->get(['id', 'title', 'created_at']);
+        
+            return response()->json($sessions);
+        } catch (\Throwable $e) {
+            Log::error('Chat sessions error', [
+                'error' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            return response()->json(['error' => 'Failed to fetch sessions: ' . $e->getMessage()], 500);
+        }
     }
     
 
@@ -39,21 +54,35 @@ class AiChatHistoryApiController extends Controller
      */
     public function messages(Request $request, $sessionId)
     {
-        $user = $request->user();
+        try {
+            $user = $request->user();
+            
+            if (!$user) {
+                return response()->json(['error' => 'Unauthenticated'], 401);
+            }
 
-        $session = ChatSession::where('id', $sessionId)
-            ->where('user_id', $user->id)
-            ->first();
+            $session = ChatSession::where('id', $sessionId)
+                ->where('user_id', $user->id)
+                ->first();
 
-        if (!$session) {
-            return response()->json(['message' => 'Session not found.'], 404);
+            if (!$session) {
+                return response()->json(['message' => 'Session not found.'], 404);
+            }
+
+            $messages = $session->messages()
+                ->orderBy('created_at')
+                ->get(['id', 'role', 'content', 'created_at']);
+
+            return response()->json($messages);
+        } catch (\Throwable $e) {
+            Log::error('Chat messages error', [
+                'error' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+                'session_id' => $sessionId,
+            ]);
+            return response()->json(['error' => 'Failed to fetch messages: ' . $e->getMessage()], 500);
         }
-
-        $messages = $session->messages()
-            ->orderBy('created_at')
-            ->get(['id', 'role', 'content', 'created_at']);
-
-        return response()->json($messages);
     }
 
     /**

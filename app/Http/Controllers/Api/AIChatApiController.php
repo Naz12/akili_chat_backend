@@ -38,6 +38,15 @@ class AIChatApiController extends Controller
             ]);
             
             $user   = $request->user();
+            
+            // Safety check - should not happen due to auth middleware, but just in case
+            if (!$user) {
+                Log::error('User is null in chat endpoint', [
+                    'uri' => $request->getRequestUri(),
+                    'headers' => $request->headers->all(),
+                ]);
+                return response()->json(['error' => 'Unauthenticated'], 401);
+            }
 
             // ✅ Prevent execution if quota failed
             $quotaResult = $usageValidator->checkQuota($user);   // full check
