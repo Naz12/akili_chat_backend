@@ -511,13 +511,26 @@ class AIChatApiController extends Controller
                             $engine = $fallbackEngine; // Update engine reference for token tracking
                             Log::info('Fallback successful', ['engine' => $engine->name]);
                         } else {
+                            Log::error('Fallback engine request failed', [
+                                'provider' => $fallbackEngine->provider,
+                                'status' => $fallbackRes->status(),
+                                'body' => $fallbackRes->body(),
+                            ]);
                             return response()->json(['error' => 'Both primary and fallback AI services failed'], 500);
                         }
                     } catch (\Exception $e) {
-                        Log::error('Fallback failed', ['error' => $e->getMessage()]);
+                        Log::error('Fallback failed with exception', [
+                            'error' => $e->getMessage(),
+                            'trace' => $e->getTraceAsString(),
+                        ]);
                         return response()->json(['error' => 'AI service unavailable'], 500);
                     }
                 } else {
+                    Log::warning('No fallback engine available', [
+                        'fallback_exists' => $fallbackEngine ? true : false,
+                        'fallback_id' => $fallbackEngine?->id,
+                        'current_engine_id' => $engine->id,
+                    ]);
                     return response()->json(['error' => 'AI service unavailable'], 500);
                 }
             }
@@ -542,7 +555,7 @@ class AIChatApiController extends Controller
                     'user_id'         => $user->id,
                     'role'            => 'user',
                     'content'         => $file,
-                    'is_vision_support'   => true,
+                    'is_attachment'   => true,
                 ]);
             }
             if ($prompt) {

@@ -34,6 +34,22 @@ class ChatSession extends Model
         return $this->hasMany(ChatSessionDoc::class, 'chat_session_id');
     }
 
+    /**
+     * Shares where this session is the original
+     */
+    public function sharesAsOriginal()
+    {
+        return $this->hasMany(ChatSessionShare::class, 'original_chat_session_id');
+    }
+
+    /**
+     * Shares where this session is the duplicated copy
+     */
+    public function sharesAsDuplicated()
+    {
+        return $this->hasMany(ChatSessionShare::class, 'duplicated_chat_session_id');
+    }
+
     protected static function boot()
     {
         parent::boot();

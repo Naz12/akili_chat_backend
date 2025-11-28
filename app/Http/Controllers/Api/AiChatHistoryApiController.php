@@ -66,7 +66,15 @@ class AiChatHistoryApiController extends Controller
                 ->first();
 
             if (!$session) {
-                return response()->json(['message' => 'Session not found.'], 404);
+                Log::warning('Chat session not found or access denied', [
+                    'user_id' => $user->id,
+                    'session_id' => $sessionId,
+                    'session_exists' => ChatSession::where('id', $sessionId)->exists(),
+                ]);
+                return response()->json([
+                    'error' => 'Session not found or access denied.',
+                    'message' => 'The chat session you are trying to access does not exist or you do not have permission to view it.',
+                ], 404);
             }
 
             $messages = $session->messages()

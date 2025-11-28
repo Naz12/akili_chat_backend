@@ -13,6 +13,7 @@ use App\Http\Controllers\Api\NotificationApiController;
 use App\Http\Controllers\Api\SubscriptionApiController;
 use App\Http\Controllers\Api\PaymentMethodApiController;
 use App\Http\Controllers\Api\AiChatHistoryApiController;
+use App\Http\Controllers\Api\ChatSessionShareController;
 use App\Http\Controllers\Api\PaymentApiController;
 use App\Http\Controllers\Api\PaymentWebhookController;
 
@@ -57,6 +58,14 @@ Route::prefix('v1')->group(function () {
                         
                         Route::post('/upload', [AIChatApiController::class, 'uploadAttachment'])
                             ->middleware('quota.check');
+
+                        // 📤 Chat Session Sharing
+                        Route::post('/sessions/{sessionId}/share', [ChatSessionShareController::class, 'share']);
+                        Route::get('/shares/incoming', [ChatSessionShareController::class, 'incoming']);
+                        Route::get('/shares/outgoing', [ChatSessionShareController::class, 'outgoing']);
+                        Route::get('/shares/{shareId}', [ChatSessionShareController::class, 'show']);
+                        Route::post('/shares/{shareId}/accept', [ChatSessionShareController::class, 'accept']);
+                        Route::post('/shares/{shareId}/decline', [ChatSessionShareController::class, 'decline']);
                     });
 
                     // 📊 Token Usage
@@ -65,6 +74,7 @@ Route::prefix('v1')->group(function () {
 
                     // 🔔 Notifications
                     Route::get('/notifications', [NotificationApiController::class, 'index']);
+                    Route::post('/notifications/{notificationId}/read', [NotificationApiController::class, 'markRead']);
                     Route::post('/notifications/read', [NotificationApiController::class, 'markAllRead']);
 
                     // 📄 Billing APIs
