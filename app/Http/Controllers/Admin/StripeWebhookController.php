@@ -2,89 +2,59 @@
 
 namespace App\Http\Controllers\Admin;
 
-use App\Models\Subscription;
-use App\Models\Plan;
-use App\Models\User;
+use App\Services\Payment\PaymentManager;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use App\Http\Controllers\Controller;
 use App\Models\Webhook;
-use Stripe\Webhook as StripeWebhook;
 
+/**
+ * Legacy Stripe Webhook Controller
+ * 
+ * This controller is kept for backward compatibility.
+ * New webhooks should use PaymentWebhookController.
+ * 
+ * @deprecated Use PaymentWebhookController instead
+ */
 class StripeWebhookController extends Controller
 {
+    protected PaymentManager $paymentManager;
+
+    public function __construct(PaymentManager $paymentManager)
+    {
+        $this->paymentManager = $paymentManager;
+    }
+
     public function handle(Request $request)
     {
-        $secret    = config('services.stripe.webhook_secret');
-        $payload   = $request->getContent();
+        $payload = $request->getContent();
         $signature = $request->header('Stripe-Signature');
 
         // Save raw webhook to database
-        Webhook::create([
-            'provider'   => 'stripe',
-            'event_type' => 'raw',
-            'signature'  => $signature,
-            'payload'    => json_decode($payload, true),
-        ]);
-
-        // Validate event
         try {
-            $event = StripeWebhook::constructEvent($payload, $signature, $secret);
+            Webhook::create([
+                'provider' => 'stripe',
+                'event_type' => 'legacy_webhook',
+                'signature' => $signature,
+                'payload' => json_decode($payload, true) ?: [],
+            ]);
         } catch (\Exception $e) {
-            Log::error('❌ Stripe Webhook signature invalid', ['error' => $e->getMessage()]);
-            return response()->json(['message' => 'Invalid signature'], 400);
+            Log::warning('Failed to save webhook log', ['error' => $e->getMessage()]);
         }
 
-        // Process successful checkout
-        if ($event->type === 'checkout.session.completed') {
-            $session = $event->data->object;
+        try {
+            // Use PaymentManager to process webhook
+            // This will update payment status and trigger subscription creation via event
+            $this->paymentManager->processWebhook('stripe', $payload, $signature);
 
-            $userId = $session->metadata->user_id ?? null;
-            $planId = $session->metadata->plan_id ?? null;
-
-            if (!$userId || !$planId) {
-                Log::warning('⚠️ Stripe Webhook: Missing metadata', ['session_id' => $session->id]);
-                return response()->json(['message' => 'Missing metadata'], 400);
-            }
-
-            $user = User::find($userId);
-            $plan = Plan::find($planId);
-
-            if (!$user || !$plan) {
-                Log::error('❌ Stripe Webhook: Invalid user or plan', [
-                    'user_id' => $userId,
-                    'plan_id' => $planId,
-                ]);
-                return response()->json(['message' => 'Invalid user or plan'], 404);
-            }
-
-            // Deactivate previous active subscriptions
-            Subscription::where('user_id', $user->id)
-                ->where('is_active', true)
-                ->update([
-                    'is_active' => false,
-                    'end_date'  => now(),
-                ]);
-
-            // Create new active subscription
-            Subscription::create([
-                'user_id'     => $user->id,
-                'plan_id'     => $plan->id,
-                'start_date'  => now(),
-                'end_date'    => now()->addDays(30),
-                'tokens_used' => 0,
-                'is_active'   => true,
-                'auto_renew'  => true,
-                'tx_ref'      => $session->id, // Optional: store Stripe session ID
+            return response()->json(['status' => 'ok']);
+        } catch (\Exception $e) {
+            Log::error('❌ Stripe Webhook processing failed', [
+                'error' => $e->getMessage(),
+                'signature' => $signature,
             ]);
 
-            Log::info('✅ Stripe subscription created', [
-                'user_id'    => $user->id,
-                'plan_id'    => $plan->id,
-                'session_id' => $session->id,
-            ]);
+            return response()->json(['message' => $e->getMessage()], 400);
         }
-
-        return response()->json(['status' => 'ok']);
     }
 }

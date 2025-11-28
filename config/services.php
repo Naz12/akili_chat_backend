@@ -44,7 +44,18 @@ return [
     ],
 
     'stripe' => [
+        'publishable_key' => env('STRIPE_PUBLISHABLE_KEY'),
+        'secret_key' => env('STRIPE_SECRET_KEY'),
         'webhook_secret' => env('STRIPE_WEBHOOK_SECRET'),
+        'mode' => env('STRIPE_MODE', 'test'),
+    ],
+
+    'chapa' => [
+        'public_key' => env('CHAPA_PUBLIC_KEY'),
+        'secret_key' => env('CHAPA_SECRET_KEY'),
+        'webhook_secret' => env('CHAPA_WEBHOOK_SECRET'),
+        'mode' => env('CHAPA_MODE', 'test'),
+        'base_url' => env('CHAPA_BASE_URL', 'https://api.chapa.co/v1'),
     ],
 
     'flutterwave' => [

@@ -13,6 +13,8 @@ use App\Http\Controllers\Api\NotificationApiController;
 use App\Http\Controllers\Api\SubscriptionApiController;
 use App\Http\Controllers\Api\PaymentMethodApiController;
 use App\Http\Controllers\Api\AiChatHistoryApiController;
+use App\Http\Controllers\Api\PaymentApiController;
+use App\Http\Controllers\Api\PaymentWebhookController;
 
 
 Route::prefix('v1')->group(function () {
@@ -37,7 +39,7 @@ Route::prefix('v1')->group(function () {
                 Route::middleware(['ensure.region.match'])->group(function () use ($prefix) {
                     // 🗂️ Plans & Subscriptions
                     Route::get('/plans', [PlanApiController::class, 'index']);
-                    Route::post('/subscribe', [SubscriptionApiController::class, 'subscribe']);
+                    Route::post('/subscribe', [SubscriptionApiController::class, 'store']);
                     Route::get('/subscription', [SubscriptionApiController::class, 'current']);
                     Route::get('/user/has-subscription', [SubscriptionApiController::class, 'hasSubscription']);
 
@@ -76,6 +78,12 @@ Route::prefix('v1')->group(function () {
                     Route::post('/payment/telebirr/callback', [SubscriptionApiController::class, 'handleTelebirrCallback'])
                         ->name("api.payment.telebirr.callback.{$prefix}");
                     
+                    // 💳 Payment Endpoints
+                    Route::post('/payments/create', [PaymentApiController::class, 'create']);
+                    Route::get('/payments/status', [PaymentApiController::class, 'status']);
+                    Route::post('/payments/verify', [PaymentApiController::class, 'verify']);
+                    Route::get('/payments/history', [PaymentApiController::class, 'history']);
+                    
                     // 🧠 Workflow Insights & Optimization
                     Route::prefix('insights')->group(function () {
                         Route::get('/summary', [WorkflowInsightsController::class, 'summary']);
@@ -85,4 +93,17 @@ Route::prefix('v1')->group(function () {
             });
         });
     }
+    
+    // Webhook endpoints (public, signature verified, CSRF exempt)
+    Route::post('/payments/webhook/stripe', [PaymentWebhookController::class, 'handleStripe'])
+        ->name('api.payments.webhook.stripe')
+        ->withoutMiddleware([\Illuminate\Foundation\Http\Middleware\VerifyCsrfToken::class]);
+    Route::match(['GET', 'POST'], '/payments/webhook/chapa', [PaymentWebhookController::class, 'handleChapa'])
+        ->name('api.payments.webhook.chapa')
+        ->withoutMiddleware([\Illuminate\Foundation\Http\Middleware\VerifyCsrfToken::class]);
+    
+    // Redirect endpoint for Chapa return_url (processes and redirects to frontend)
+    Route::get('/payments/webhook/chapa/redirect', [PaymentWebhookController::class, 'handleChapa'])
+        ->name('api.payments.webhook.chapa.redirect')
+        ->withoutMiddleware([\Illuminate\Foundation\Http\Middleware\VerifyCsrfToken::class]);
 });

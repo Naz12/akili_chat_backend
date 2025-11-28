@@ -5,15 +5,24 @@ namespace App\Http\Controllers\Api;
 use Carbon\Carbon;
 use App\Models\Plan;
 use App\Models\Subscription;
+use App\Services\Payment\PaymentManager;
 use Illuminate\Http\Request;
 use App\Traits\DetectsRegion;
+use App\Traits\AddsCorsHeaders;
 use Illuminate\Support\Facades\Log;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\SubscriptionResource;
 
 class SubscriptionApiController extends Controller
 {
-    use DetectsRegion;
+    use DetectsRegion, AddsCorsHeaders;
+
+    protected PaymentManager $paymentManager;
+
+    public function __construct(PaymentManager $paymentManager)
+    {
+        $this->paymentManager = $paymentManager;
+    }
 
     /**
      * Subscribe the authenticated user to a new plan.
@@ -102,8 +111,8 @@ class SubscriptionApiController extends Controller
             return $this->initiateTelebirrPayment($user, $plan, $subscription);
         }
     
-        if ($request->payment_method === 'stripe') {
-            return $this->initiateStripePayment($user, $plan, $subscription);
+        if (in_array($request->payment_method, ['stripe', 'chapa'])) {
+            return $this->initiatePayment($user, $plan, $subscription, $request->payment_method);
         }
     
         return response()->json(['message' => 'Unsupported payment method.'], 422);
@@ -191,7 +200,59 @@ class SubscriptionApiController extends Controller
     }
 
 
-        protected function initiateTelebirrPayment($user, $plan, $subscription)
+    /**
+     * Initiate payment using PaymentManager (for Stripe and Chapa).
+     */
+    protected function initiatePayment($user, $plan, $subscription, $provider)
+    {
+        try {
+            // Create payment using PaymentManager
+            $payment = $this->paymentManager->initiatePayment($user, [
+                'amount' => $plan->monthly_price,
+                'currency' => $plan->currency ?? 'USD',
+                'provider' => $provider,
+                'metadata' => [
+                    'plan_id' => $plan->id,
+                    'subscription_id' => $subscription->id,
+                    'description' => "Subscription to {$plan->name}",
+                ],
+                'description' => "Subscription to {$plan->name}",
+            ]);
+
+            // Get checkout URL from gateway response
+            $gatewayResponse = json_decode($payment->gateway_response, true);
+            $checkoutUrl = $gatewayResponse['checkout_url'] ?? null;
+
+            $response = response()->json([
+                'payment_method' => $provider,
+                'payment_id' => $payment->id,
+                'reference' => $payment->reference,
+                'checkout_url' => $checkoutUrl,
+                'subscription_id' => $subscription->id,
+                'status' => 'pending',
+            ]);
+
+            return $this->addCorsHeaders($response, request());
+        } catch (\Exception $e) {
+            Log::error('Payment initiation failed', [
+                'user_id' => $user->id,
+                'plan_id' => $plan->id,
+                'provider' => $provider,
+                'error' => $e->getMessage(),
+            ]);
+
+            $response = response()->json([
+                'message' => 'Failed to initiate payment: ' . $e->getMessage(),
+            ], 500);
+
+            return $this->addCorsHeaders($response, request());
+        }
+    }
+
+    /**
+     * Initiate Telebirr payment (legacy, not yet in payment module).
+     */
+    protected function initiateTelebirrPayment($user, $plan, $subscription)
     {
         // Replace with your actual Telebirr integration logic
         $tx_ref = 'telebirr_' . $subscription->id . '_' . now()->timestamp;

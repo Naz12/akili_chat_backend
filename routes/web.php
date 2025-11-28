@@ -18,6 +18,7 @@ use App\Http\Controllers\Admin\TokenUsageAdminController;
 // use App\Http\Controllers\Admin\FlutterwaveWebhookController;
 use Illuminate\Foundation\Http\Middleware\VerifyCsrfToken;
 use App\Http\Controllers\Admin\SubscriptionAdminController;
+use App\Http\Controllers\Admin\PaymentAdminController;
 
 
 // 🌐 Public landing page
@@ -68,6 +69,14 @@ Route::middleware(['auth', AdminMiddleware::class])
     Route::post('billing/adjust/{subscription}', [BillAdminController::class, 'updateUsage'])->name('billing.updateUsage');
 
     Route::resource('payment-methods', PaymentMethodController::class);
+    
+    // Payment Management Routes
+    Route::resource('payments', PaymentAdminController::class);
+    Route::get('payments/user/{user}', [PaymentAdminController::class, 'userPayments'])->name('payments.user');
+    Route::post('payments/{payment}/refund', [PaymentAdminController::class, 'refund'])->name('payments.refund');
+    Route::post('payments/{payment}/verify', [PaymentAdminController::class, 'verify'])->name('payments.verify');
+    Route::get('payments/stats/summary', [PaymentAdminController::class, 'stats'])->name('payments.stats');
+    
     Route::post('/webhooks/stripe', [StripeWebhookController::class, 'handle'])->withoutMiddleware([VerifyCsrfToken::class]);
     // Route::post('/webhooks/chapa', [ChapaWebhookController::class, 'handle'])->withoutMiddleware([VerifyCsrfToken::class]);
     // Route::post('/webhooks/flutterwave', [FlutterwaveWebhookController::class, 'handle'])->withoutMiddleware([VerifyCsrfToken::class]);
