@@ -29,8 +29,11 @@ class ChatSession extends Model
     {
         return $this->hasMany(ChatMessage::class, 'chat_session_id');
     }
+    public function docs()
+    {
+        return $this->hasMany(ChatSessionDoc::class, 'chat_session_id');
+    }
 
-    
     protected static function boot()
     {
         parent::boot();
@@ -42,3 +45,5 @@ class ChatSession extends Model
         });
     }
 }
+
+    

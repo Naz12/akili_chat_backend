@@ -59,6 +59,15 @@ return [
     'from' => env('TWILIO_PHONE_NUMBER'),
      ],
 
+    // Brain orchestration microservice endpoints
+    'brain' => [
+        'transcriber_url' => env('TRANSCRIBER_URL'),
+        'doc_service_url' => env('DOC_SERVICE_URL'),
+        'hmac_secret' => env('DAGU_HMAC_SECRET'),
+        'transcriber_client_key' => env('TRANSCRIBER_CLIENT_KEY'),
+        'brightdata_dataset_id' => env('TRANSCRIBER_BRIGHTDATA_DATASET_ID'),
+    ],
+
 
 
 ];
