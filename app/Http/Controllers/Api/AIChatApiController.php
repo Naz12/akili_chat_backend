@@ -39,14 +39,41 @@ class AIChatApiController extends Controller
     public function handleChat(Request $request, UsageValidatorService $usageValidator)
     {
         try {
+            // Try to authenticate user from JWT token (route is not protected by auth:api middleware)
+            $user = null;
+            $authHeader = $request->header('Authorization');
+            
+            if ($authHeader) {
+                // Also check for token in other possible header formats (some proxies modify headers)
+                if (stripos($authHeader, 'Bearer') !== 0) {
+                    $authHeader = $request->header('X-Authorization') 
+                        ?? $request->header('HTTP_AUTHORIZATION')
+                        ?? $request->header('Authorization');
+                }
+                
+                if ($authHeader && stripos($authHeader, 'Bearer') === 0) {
+                    try {
+                        $token = preg_replace('/^Bearer\s+/i', '', $authHeader);
+                        if ($token && $token !== $authHeader && strlen($token) > 50) {
+                            \Tymon\JWTAuth\Facades\JWTAuth::setToken($token);
+                            $user = \Tymon\JWTAuth\Facades\JWTAuth::authenticate();
+                        }
+                    } catch (\Exception $e) {
+                        // Token is invalid or expired, treat as guest
+                        Log::debug('JWT token validation failed in handleChat', [
+                            'error' => $e->getMessage(),
+                        ]);
+                    }
+                }
+            }
+            
             Log::info('=== Chat Request Started ===', [
-                'user_id' => $request->user()?->id,
-                'user_region' => $request->user()?->region,
+                'user_id' => $user?->id,
+                'user_region' => $user?->region,
                 'message_length' => strlen($request->input('message', '')),
                 'has_session_id' => !empty($request->input('session_id')),
             ]);
             
-            $user = $request->user();
             $guestSession = null;
             $isGuest = false;
             
@@ -99,12 +126,36 @@ class AIChatApiController extends Controller
                 $sessionId = $request->input('session_id');
                 $title = Str::limit($prompt, 50);
                 if ($sessionId) {
-                    $session = ChatSession::firstOrCreate(
-                        ['id' => $sessionId, 'user_id' => $user->id],
-                        ['title' => $title]
-                    );
-                    if ($session->title === 'Untitled' && $title !== 'Untitled') {
-                        $session->update(['title' => $title]);
+                    // Check if session exists first
+                    $existingSession = ChatSession::find($sessionId);
+                    
+                    if ($existingSession) {
+                        // Session exists - verify ownership
+                        if ($existingSession->user_id !== $user->id) {
+                            // Session belongs to different user - create new session
+                            Log::warning('Session ID conflict in workflow - creating new session', [
+                                'requested_session_id' => $sessionId,
+                                'existing_user_id' => $existingSession->user_id,
+                                'current_user_id' => $user->id,
+                            ]);
+                            $session = ChatSession::create([
+                                'user_id' => $user->id,
+                                'title' => $title,
+                            ]);
+                        } else {
+                            // Session belongs to current user - use it
+                            $session = $existingSession;
+                            if ($session->title === 'Untitled' && $title !== 'Untitled') {
+                                $session->update(['title' => $title]);
+                            }
+                        }
+                    } else {
+                        // Session doesn't exist - create it
+                        $session = ChatSession::create([
+                            'id' => $sessionId,
+                            'user_id' => $user->id,
+                            'title' => $title,
+                        ]);
                     }
                 } else {
                     $session = ChatSession::create([
@@ -191,12 +242,36 @@ class AIChatApiController extends Controller
                 );
 
                 if ($sessionId) {
-                    $session = ChatSession::firstOrCreate(
-                        ['id' => $sessionId, 'user_id' => $user->id],
-                        ['title' => $title]
-                    );
-                    if ($session->title === 'Untitled' && $title !== 'Untitled') {
-                        $session->update(['title' => $title]);
+                    // Check if session exists first
+                    $existingSession = ChatSession::find($sessionId);
+                    
+                    if ($existingSession) {
+                        // Session exists - verify ownership
+                        if ($existingSession->user_id !== $user->id) {
+                            // Session belongs to different user - create new session
+                            Log::warning('Session ID conflict in brain - creating new session', [
+                                'requested_session_id' => $sessionId,
+                                'existing_user_id' => $existingSession->user_id,
+                                'current_user_id' => $user->id,
+                            ]);
+                            $session = ChatSession::create([
+                                'user_id' => $user->id,
+                                'title' => $title,
+                            ]);
+                        } else {
+                            // Session belongs to current user - use it
+                            $session = $existingSession;
+                            if ($session->title === 'Untitled' && $title !== 'Untitled') {
+                                $session->update(['title' => $title]);
+                            }
+                        }
+                    } else {
+                        // Session doesn't exist - create it
+                        $session = ChatSession::create([
+                            'id' => $sessionId,
+                            'user_id' => $user->id,
+                            'title' => $title,
+                        ]);
                     }
                 } else {
                     $session = ChatSession::create([
@@ -481,14 +556,43 @@ class AIChatApiController extends Controller
                         ['title' => $title, 'is_guest' => true]
                     );
                 } else {
-                    $session = ChatSession::firstOrCreate(
-                        ['id' => $sessionId, 'user_id' => $user->id],
-                        ['title' => $title, 'is_guest' => false]
-                    );
+                    // Check if session exists first
+                    $existingSession = ChatSession::find($sessionId);
+                    
+                    if ($existingSession) {
+                        // Session exists - verify ownership
+                        if ($existingSession->user_id !== $user->id) {
+                            // Session belongs to different user - create new session
+                            Log::warning('Session ID conflict - creating new session', [
+                                'requested_session_id' => $sessionId,
+                                'existing_user_id' => $existingSession->user_id,
+                                'current_user_id' => $user->id,
+                            ]);
+                            $session = ChatSession::create([
+                                'user_id' => $user->id,
+                                'is_guest' => false,
+                                'title' => $title,
+                            ]);
+                        } else {
+                            // Session belongs to current user - use it
+                            $session = $existingSession;
+                            if ($session->title === 'Untitled' && $title !== 'Untitled') {
+                                $session->update(['title' => $title]);
+                            }
+                        }
+                    } else {
+                        // Session doesn't exist - create it
+                        $session = ChatSession::create([
+                            'id' => $sessionId,
+                            'user_id' => $user->id,
+                            'is_guest' => false,
+                            'title' => $title,
+                        ]);
+                    }
                 }
 
-                // Force title update only if it's still the default
-                if ($session->title === 'Untitled' && $title !== 'Untitled') {
+                // Force title update only if it's still the default (for non-existing sessions)
+                if (!isset($existingSession) && $session->title === 'Untitled' && $title !== 'Untitled') {
                     $session->update(['title' => $title]);
                 }
             } else {

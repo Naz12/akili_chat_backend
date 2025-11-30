@@ -22,21 +22,8 @@ class EnsureRegionMatchesUser
                 'uri' => $request->getRequestUri(),
             ]);
 
-            $origin = $request->headers->get('Origin');
-            $allowedOrigins = config('cors.allowed_origins', []);
-            $allowedOrigin = ($origin && in_array($origin, $allowedOrigins)) ? $origin : ($allowedOrigins[0] ?? '*');
-            
-            $response = response()->json(['error' => 'Region mismatch'], 403);
-            if ($allowedOrigin !== '*') {
-                $response->header('Access-Control-Allow-Origin', $allowedOrigin)
-                         ->header('Access-Control-Allow-Credentials', 'true');
-            } else {
-                $response->header('Access-Control-Allow-Origin', '*');
-            }
-            $response->header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
-                     ->header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
-            
-            return $response;
+            // CORS headers will be added by AddCorsHeaders middleware
+            return response()->json(['error' => 'Region mismatch'], 403);
         }
 
         return $next($request);

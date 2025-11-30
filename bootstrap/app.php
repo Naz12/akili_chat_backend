@@ -20,17 +20,8 @@ return Application::configure(basePath: dirname(__DIR__))
         ]);
         
         // Enable CORS for ALL routes - must be first to handle OPTIONS requests
+        // Single source of truth: Only use AddCorsHeaders middleware
         $middleware->prepend(\App\Http\Middleware\AddCorsHeaders::class);
-        
-        // Also use Laravel's built-in CORS handler
-        $middleware->api(prepend: [
-            \Illuminate\Http\Middleware\HandleCors::class,
-        ]);
-        
-        // Ensure CORS headers are always added as a fallback
-        $middleware->api(append: [
-            \App\Http\Middleware\AddCorsHeaders::class,
-        ]);
         
         // Prevent redirects for unauthenticated API requests
         $middleware->redirectGuestsTo(function ($request) {
@@ -41,20 +32,24 @@ return Application::configure(basePath: dirname(__DIR__))
         });
     })
     ->withExceptions(function (Exceptions $exceptions) {
-        // Helper function to add CORS headers to response
+        // Helper function to add CORS headers to response (only if not already present)
+        // The AddCorsHeaders middleware should handle this, but this is a fallback for exceptions
         $addCorsHeaders = function($response, $request) {
-            $origin = $request->headers->get('Origin');
-            $allowedOrigins = config('cors.allowed_origins', []);
-            $allowedOrigin = ($origin && in_array($origin, $allowedOrigins)) ? $origin : ($allowedOrigins[0] ?? '*');
-            
-            if ($allowedOrigin !== '*') {
-                $response->header('Access-Control-Allow-Origin', $allowedOrigin)
-                         ->header('Access-Control-Allow-Credentials', 'true');
-            } else {
-                $response->header('Access-Control-Allow-Origin', '*');
+            // Only add if not already present (middleware should have added them)
+            if (!$response->headers->has('Access-Control-Allow-Origin')) {
+                $origin = $request->headers->get('Origin');
+                $allowedOrigins = config('cors.allowed_origins', []);
+                $allowedOrigin = ($origin && in_array($origin, $allowedOrigins)) ? $origin : ($allowedOrigins[0] ?? '*');
+                
+                if ($allowedOrigin !== '*') {
+                    $response->header('Access-Control-Allow-Origin', $allowedOrigin)
+                             ->header('Access-Control-Allow-Credentials', 'true');
+                } else {
+                    $response->header('Access-Control-Allow-Origin', '*');
+                }
+                $response->header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH')
+                         ->header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin, X-Guest-UUID, X-CSRF-TOKEN, Referer, User-Agent, post');
             }
-            $response->header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
-                     ->header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
             
             return $response;
         };

@@ -13,7 +13,7 @@ return [
 
     'allowed_origins_patterns' => [],
 
-    'allowed_headers' => ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
+    'allowed_headers' => ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin', 'X-Guest-UUID', 'X-CSRF-TOKEN', 'Referer', 'User-Agent', 'post'],
 
     'exposed_headers' => [],
 
