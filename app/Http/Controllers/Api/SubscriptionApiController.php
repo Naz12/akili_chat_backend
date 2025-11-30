@@ -10,6 +10,7 @@ use Illuminate\Http\Request;
 use App\Traits\DetectsRegion;
 use App\Traits\AddsCorsHeaders;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\DB;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\SubscriptionResource;
 
@@ -54,23 +55,43 @@ class SubscriptionApiController extends Controller
                 ], 403);
             }
     
-            // Cancel previous
-            Subscription::where('user_id', $user->id)
-                ->where('is_active', true)
-                ->update([
-                    'is_active' => false,
-                    'end_date'  => now(),
+            // Prevent multiple active subscriptions with transaction lock
+            $subscription = DB::transaction(function () use ($user, $plan) {
+                // Lock user's subscriptions to prevent race conditions
+                $existingActive = Subscription::where('user_id', $user->id)
+                    ->where('is_active', true)
+                    ->lockForUpdate()
+                    ->first();
+                
+                if ($existingActive) {
+                    // Cancel previous active subscription
+                    $existingActive->update([
+                        'is_active' => false,
+                        'end_date'  => now(),
+                    ]);
+                }
+                
+                // Calculate end_date based on billing cycle (default 30 days for free)
+                $billingCycle = $plan->billing_cycle ?? 'monthly';
+                $endDate = match($billingCycle) {
+                    'quarterly' => now()->addMonths(3),
+                    'annual' => now()->addMonths(12),
+                    default => now()->addDays(30), // monthly default for free
+                };
+                
+                return Subscription::create([
+                    'user_id'     => $user->id,
+                    'plan_id'     => $plan->id,
+                    'start_date'  => now(),
+                    'end_date'    => $endDate,
+                    'tokens_used' => 0,
+                    'is_active'   => true,
+                    'auto_renew'  => false,
+                    'metadata'    => [
+                        'billing_cycle' => $billingCycle,
+                    ],
                 ]);
-    
-            $subscription = Subscription::create([
-                'user_id'     => $user->id,
-                'plan_id'     => $plan->id,
-                'start_date'  => now(),
-                'end_date'    => now()->addDays(30),
-                'tokens_used' => 0,
-                'is_active'   => true,
-                'auto_renew'  => false,
-            ]);
+            });
     
             return response()->json([
                 'message' => 'Free subscription activated.',
@@ -85,26 +106,45 @@ class SubscriptionApiController extends Controller
             ], 422);
         }
     
-        // Cancel previous
-        Subscription::where('user_id', $user->id)
-            ->where('is_active', true)
-            ->update([
-                'is_active' => false,
-                'end_date'  => now(),
+        // Prevent multiple active subscriptions with transaction lock
+        $subscription = DB::transaction(function () use ($user, $plan, $request) {
+            // Lock user's subscriptions to prevent race conditions
+            $existingActive = Subscription::where('user_id', $user->id)
+                ->where('is_active', true)
+                ->lockForUpdate()
+                ->first();
+            
+            if ($existingActive) {
+                // Cancel previous active subscription
+                $existingActive->update([
+                    'is_active' => false,
+                    'end_date'  => now(),
+                ]);
+            }
+            
+            // Calculate end_date based on billing cycle
+            $billingCycle = $plan->billing_cycle ?? 'monthly';
+            $endDate = match($billingCycle) {
+                'quarterly' => now()->addMonths(3),
+                'annual' => now()->addMonths(12),
+                default => now()->addMonths(1), // monthly
+            };
+            
+            // Create subscription in "pending" state
+            return Subscription::create([
+                'user_id'     => $user->id,
+                'plan_id'     => $plan->id,
+                'start_date'  => now(),
+                'end_date'    => $endDate,
+                'tokens_used' => 0,
+                'is_active'   => false,
+                'auto_renew'  => true,
+                'metadata'    => [
+                    'payment_method' => $request->payment_method,
+                    'billing_cycle' => $billingCycle,
+                ],
             ]);
-    
-        // Create subscription in "pending" state
-        $subscription = Subscription::create([
-            'user_id'     => $user->id,
-            'plan_id'     => $plan->id,
-            'start_date'  => now(),
-            'end_date'    => now()->addDay(), // temporary until payment verified
-            'tokens_used' => 0,
-            'is_active'   => false,
-            'auto_renew'  => true,
-            'status'      => 'pending', // if you use status column
-            'payment_method' => $request->payment_method,
-        ]);
+        });
     
         // Redirect/return appropriate payment flow
         if ($request->payment_method === 'telebirr') {
@@ -294,20 +334,35 @@ class SubscriptionApiController extends Controller
             'headers' => $request->headers->all(),
         ]);
     
-        // 3. ✅ Verify Signature
+        // 3. ✅ Verify Signature (REQUIRED - reject if mismatch)
         $secret = config('services.telebirr.secret');
+        if (!$secret) {
+            Log::error('Telebirr secret not configured');
+            return response()->json(['message' => 'Webhook configuration error'], 500);
+        }
+        
         $rawPayload = $request->getContent();
-        $providedSignature = $request->header('X-Telebirr-Signature'); // Adjust header name if different
+        $providedSignature = $request->header('X-Telebirr-Signature') 
+            ?? $request->header('X-Signature')
+            ?? $request->input('signature');
+    
+        if (!$providedSignature) {
+            Log::error('Telebirr signature missing', ['headers' => $request->headers->all()]);
+            return response()->json(['message' => 'Signature required'], 403);
+        }
     
         $calculatedSignature = hash_hmac('sha256', $rawPayload, $secret);
     
         if (!hash_equals($providedSignature, $calculatedSignature)) {
-            Log::error('Telebirr Signature Mismatch', [
+            Log::error('❌ Telebirr Signature Mismatch - REJECTING webhook', [
                 'provided' => $providedSignature,
                 'calculated' => $calculatedSignature,
+                'ip' => $request->ip(),
             ]);
             return response()->json(['message' => 'Invalid signature'], 403);
         }
+        
+        Log::info('✅ Telebirr webhook signature verified');
     
         // 4. ✅ Find and activate the subscription
         $tx_ref = $request->input('reference');
@@ -332,7 +387,284 @@ class SubscriptionApiController extends Controller
     
         return response()->json(['message' => 'Payment confirmed and subscription activated']);
     }
-    
 
+    /**
+     * List all user subscriptions (active and inactive)
+     */
+    public function index(Request $request)
+    {
+        $user = $request->user();
+        $region = $this->getRegion($request);
 
+        $subscriptions = Subscription::with('plan.aiEngine')
+            ->where('user_id', $user->id)
+            ->whereHas('plan', fn($q) => $q->where('region', $region))
+            ->orderByDesc('start_date')
+            ->paginate(20);
+
+        return SubscriptionResource::collection($subscriptions);
+    }
+
+    /**
+     * Get single subscription details
+     */
+    public function show(Request $request, $id)
+    {
+        $user = $request->user();
+        $region = $this->getRegion($request);
+
+        $subscription = Subscription::with('plan.aiEngine')
+            ->where('id', $id)
+            ->where('user_id', $user->id)
+            ->whereHas('plan', fn($q) => $q->where('region', $region))
+            ->firstOrFail();
+
+        return new SubscriptionResource($subscription);
+    }
+
+    /**
+     * Update subscription (auto_renew, payment_method)
+     */
+    public function update(Request $request, $id)
+    {
+        $user = $request->user();
+        $region = $this->getRegion($request);
+
+        $subscription = Subscription::with('plan')
+            ->where('id', $id)
+            ->where('user_id', $user->id)
+            ->whereHas('plan', fn($q) => $q->where('region', $region))
+            ->firstOrFail();
+
+        $request->validate([
+            'auto_renew' => 'sometimes|boolean',
+            'payment_method' => 'sometimes|string',
+        ]);
+
+        if ($request->has('auto_renew')) {
+            $subscription->auto_renew = $request->auto_renew;
+        }
+
+        if ($request->has('payment_method')) {
+            $metadata = $subscription->metadata ?? [];
+            $metadata['payment_method'] = $request->payment_method;
+            $subscription->metadata = $metadata;
+        }
+
+        $subscription->save();
+
+        return new SubscriptionResource($subscription->load('plan.aiEngine'));
+    }
+
+    /**
+     * Cancel subscription
+     */
+    public function destroy(Request $request, $id)
+    {
+        $user = $request->user();
+        $region = $this->getRegion($request);
+
+        $subscription = Subscription::with('plan')
+            ->where('id', $id)
+            ->where('user_id', $user->id)
+            ->whereHas('plan', fn($q) => $q->where('region', $region))
+            ->firstOrFail();
+
+        $subscription->update([
+            'is_active' => false,
+            'auto_renew' => false,
+            'end_date' => now(),
+        ]);
+
+        return response()->json([
+            'message' => 'Subscription cancelled successfully',
+            'subscription' => new SubscriptionResource($subscription->load('plan.aiEngine')),
+        ]);
+    }
+
+    /**
+     * Check renewal status
+     */
+    public function renewalStatus(Request $request)
+    {
+        $user = $request->user();
+        $region = $this->getRegion($request);
+
+        $subscription = Subscription::with('plan')
+            ->where('user_id', $user->id)
+            ->whereHas('plan', fn($q) => $q->where('region', $region))
+            ->where('is_active', true)
+            ->first();
+
+        if (!$subscription) {
+            return response()->json(['message' => 'No active subscription'], 404);
+        }
+
+        $nextRenewalDate = $subscription->end_date;
+        $daysUntilRenewal = now()->diffInDays($nextRenewalDate, false);
+        $paymentMethod = $subscription->metadata['payment_method'] ?? null;
+
+        return response()->json([
+            'subscription_id' => $subscription->id,
+            'auto_renew' => $subscription->auto_renew,
+            'next_renewal_date' => $nextRenewalDate->toIso8601String(),
+            'days_until_renewal' => $daysUntilRenewal,
+            'payment_method' => $paymentMethod,
+            'payment_method_status' => $paymentMethod ? 'configured' : 'not_configured',
+            'grace_period_ends_at' => $subscription->grace_period_ends_at?->toIso8601String(),
+            'payment_failure_count' => $subscription->payment_failure_count ?? 0,
+        ]);
+    }
+
+    /**
+     * Manually trigger renewal
+     */
+    public function renew(Request $request, $id)
+    {
+        $user = $request->user();
+        $region = $this->getRegion($request);
+
+        $subscription = Subscription::with('plan')
+            ->where('id', $id)
+            ->where('user_id', $user->id)
+            ->whereHas('plan', fn($q) => $q->where('region', $region))
+            ->firstOrFail();
+
+        $renewalService = app(\App\Services\SubscriptionRenewalService::class);
+        $result = $renewalService->renewSubscription($subscription);
+
+        if ($result['success']) {
+            return response()->json([
+                'message' => $result['message'] ?? 'Renewal initiated successfully',
+                'subscription' => new SubscriptionResource($subscription->fresh()->load('plan.aiEngine')),
+            ]);
+        } else {
+            return response()->json([
+                'message' => $result['reason'] ?? 'Renewal failed',
+            ], 400);
+        }
+    }
+
+    /**
+     * Get available upgrade options
+     */
+    public function upgradeOptions(Request $request)
+    {
+        $user = $request->user();
+        $region = $this->getRegion($request);
+
+        $currentSubscription = Subscription::with('plan')
+            ->where('user_id', $user->id)
+            ->whereHas('plan', fn($q) => $q->where('region', $region))
+            ->where('is_active', true)
+            ->first();
+
+        if (!$currentSubscription) {
+            return response()->json(['message' => 'No active subscription'], 404);
+        }
+
+        $currentPlan = $currentSubscription->plan;
+        $currentPrice = $currentPlan->monthly_price;
+
+        $upgradeOptions = Plan::with('aiEngine')
+            ->where('region', $region)
+            ->where('is_active', true)
+            ->where('monthly_price', '>', $currentPrice)
+            ->orderBy('monthly_price')
+            ->get()
+            ->map(function ($plan) {
+                return [
+                    'id' => $plan->id,
+                    'name' => $plan->name,
+                    'monthly_price' => $plan->monthly_price,
+                    'max_tokens' => $plan->max_tokens,
+                    'daily_message_limit' => $plan->daily_message_limit,
+                    'description' => $plan->description,
+                ];
+            });
+
+        return response()->json([
+            'current_plan' => [
+                'id' => $currentPlan->id,
+                'name' => $currentPlan->name,
+                'monthly_price' => $currentPrice,
+            ],
+            'upgrade_options' => $upgradeOptions,
+        ]);
+    }
+
+    /**
+     * Get available downgrade options
+     */
+    public function downgradeOptions(Request $request)
+    {
+        $user = $request->user();
+        $region = $this->getRegion($request);
+
+        $currentSubscription = Subscription::with('plan')
+            ->where('user_id', $user->id)
+            ->whereHas('plan', fn($q) => $q->where('region', $region))
+            ->where('is_active', true)
+            ->first();
+
+        if (!$currentSubscription) {
+            return response()->json(['message' => 'No active subscription'], 404);
+        }
+
+        $currentPlan = $currentSubscription->plan;
+        $currentPrice = $currentPlan->monthly_price;
+
+        $downgradeOptions = Plan::with('aiEngine')
+            ->where('region', $region)
+            ->where('is_active', true)
+            ->where('monthly_price', '<', $currentPrice)
+            ->orderByDesc('monthly_price')
+            ->get()
+            ->map(function ($plan) {
+                return [
+                    'id' => $plan->id,
+                    'name' => $plan->name,
+                    'monthly_price' => $plan->monthly_price,
+                    'max_tokens' => $plan->max_tokens,
+                    'daily_message_limit' => $plan->daily_message_limit,
+                    'description' => $plan->description,
+                ];
+            });
+
+        return response()->json([
+            'current_plan' => [
+                'id' => $currentPlan->id,
+                'name' => $currentPlan->name,
+                'monthly_price' => $currentPrice,
+            ],
+            'downgrade_options' => $downgradeOptions,
+        ]);
+    }
+
+    /**
+     * Get payment failure history for subscription
+     */
+    public function paymentFailureHistory(Request $request)
+    {
+        $user = $request->user();
+        $region = $this->getRegion($request);
+
+        $subscription = Subscription::with('plan')
+            ->where('user_id', $user->id)
+            ->whereHas('plan', fn($q) => $q->where('region', $region))
+            ->where('is_active', true)
+            ->first();
+
+        if (!$subscription) {
+            return response()->json(['message' => 'No active subscription'], 404);
+        }
+
+        return response()->json([
+            'subscription_id' => $subscription->id,
+            'payment_failure_count' => $subscription->payment_failure_count ?? 0,
+            'grace_period_ends_at' => $subscription->grace_period_ends_at?->toIso8601String(),
+            'is_in_grace_period' => $subscription->isInGracePeriod(),
+            'has_grace_period_expired' => $subscription->hasGracePeriodExpired(),
+        ]);
+    }
 }

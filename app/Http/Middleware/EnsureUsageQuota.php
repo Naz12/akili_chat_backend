@@ -14,6 +14,12 @@ class EnsureUsageQuota
         $user = $request->user();
         \Log::debug('Quota-middleware for user', ['id' => $user?->id]);
 
+        // Allow guests through (they use default free plan with 24-hour expiration)
+        if (!$user) {
+            \Log::debug('Guest user - allowing through quota middleware');
+            return $next($request);
+        }
+
         $result = app(UsageValidatorService::class)
                   ->checkQuota($user, onlySubscription: true);  // ✅
 

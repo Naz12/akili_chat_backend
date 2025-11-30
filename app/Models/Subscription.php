@@ -18,6 +18,8 @@ class Subscription extends Model
         'is_active',     // NEW: to easily query active subscriptions
         'auto_renew',    // Optional: for future automatic renewal logic
         'metadata',      // Optional: for storing JSON details (e.g. transaction ID, source)
+        'grace_period_ends_at',
+        'payment_failure_count',
     ];
 
     protected $casts = [
@@ -26,6 +28,8 @@ class Subscription extends Model
         'is_active'  => 'boolean',
         'auto_renew' => 'boolean',
         'metadata'   => 'array',
+        'grace_period_ends_at' => 'datetime',
+        'payment_failure_count' => 'integer',
     ];
 
     // Relations
@@ -51,5 +55,21 @@ class Subscription extends Model
     public function isValid()
     {
         return $this->is_active && now()->between($this->start_date, $this->end_date);
+    }
+
+    /**
+     * Check if subscription is in grace period
+     */
+    public function isInGracePeriod(): bool
+    {
+        return $this->grace_period_ends_at && now()->lte($this->grace_period_ends_at);
+    }
+
+    /**
+     * Check if grace period has expired
+     */
+    public function hasGracePeriodExpired(): bool
+    {
+        return $this->grace_period_ends_at && now()->gt($this->grace_period_ends_at);
     }
 }

@@ -40,6 +40,23 @@ class AuthApiController extends Controller
 
             Log::info('✅ JWT login success');
 
+            // Migrate guest sessions to user account on login
+            try {
+                $migratedCount = \App\Listeners\MigrateGuestSessionsOnSignup::migrateGuestSessionsForUser($user, $request);
+                if ($migratedCount > 0) {
+                    Log::info('Migrated guest sessions on login', [
+                        'user_id' => $user->id,
+                        'sessions_count' => $migratedCount,
+                    ]);
+                }
+            } catch (\Exception $e) {
+                Log::error('Failed to migrate guest sessions on login', [
+                    'user_id' => $user->id,
+                    'error' => $e->getMessage(),
+                ]);
+                // Don't fail login if migration fails
+            }
+
             $response = response()->json([
                 'access_token' => $token,
                 'user' => $user,
@@ -100,6 +117,23 @@ class AuthApiController extends Controller
             ]);
 
             $token = JWTAuth::fromUser($user);
+
+            // Migrate guest sessions to user account
+            try {
+                $migratedCount = \App\Listeners\MigrateGuestSessionsOnSignup::migrateGuestSessionsForUser($user, $request);
+                if ($migratedCount > 0) {
+                    Log::info('Migrated guest sessions on registration', [
+                        'user_id' => $user->id,
+                        'sessions_count' => $migratedCount,
+                    ]);
+                }
+            } catch (\Exception $e) {
+                Log::error('Failed to migrate guest sessions on registration', [
+                    'user_id' => $user->id,
+                    'error' => $e->getMessage(),
+                ]);
+                // Don't fail registration if migration fails
+            }
 
             $response = response()->json([
                 'access_token' => $token,

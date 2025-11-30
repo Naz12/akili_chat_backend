@@ -15,9 +15,15 @@ class BrainOrchestrator
     /**
      * Decide if this request should be handled by orchestration ("brain").
      * Returns [content => string, trace => array] on success, or null if not applicable.
+     * Note: Brain orchestration is only available for authenticated users (not guests)
      */
-    public function maybeHandle(string $prompt, ?string $attachmentUrl, User $user): ?array
+    public function maybeHandle(string $prompt, ?string $attachmentUrl, ?User $user): ?array
     {
+        // Skip brain orchestration for guest users
+        if (!$user) {
+            return null;
+        }
+        
         $startTime = microtime(true);
         
         // Use LLM-powered intent classification for complex scenarios

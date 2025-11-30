@@ -23,9 +23,15 @@ class WorkflowComposerService
     /**
      * Detect and execute complex multi-service workflows
      * Returns workflow result or null if not a multi-service workflow
+     * Note: Workflows are only available for authenticated users (not guests)
      */
-    public function maybeCompose(string $prompt, ?string $attachmentUrl, User $user, ?string $sessionId): ?array
+    public function maybeCompose(string $prompt, ?string $attachmentUrl, ?User $user, ?string $sessionId): ?array
     {
+        // Skip workflow composition for guest users
+        if (!$user) {
+            return null;
+        }
+        
         $startTime = microtime(true);
         
         // Detect if this requires multiple services

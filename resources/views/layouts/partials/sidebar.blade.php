@@ -48,6 +48,13 @@
             <span style="font-weight: 500;">Billing</span>
         </a>
 
+        <a href="{{ route('admin.payments.index') }}"
+            class="d-flex align-items-center px-4 py-3 text-decoration-none {{ request()->routeIs('admin.payments.*') ? 'bg-primary text-white' : 'text-light' }}"
+            style="transition: all 0.2s; border-left: 3px solid {{ request()->routeIs('admin.payments.*') ? '#6366f1' : 'transparent' }};">
+            <i class="fas fa-money-bill-wave me-3" style="width: 20px;"></i>
+            <span style="font-weight: 500;">Payments</span>
+        </a>
+
         <a href="{{ route('admin.usage.logs') }}"
             class="d-flex align-items-center px-4 py-3 text-decoration-none {{ request()->routeIs('admin.usage.logs') ? 'bg-primary text-white' : 'text-light' }}"
             style="transition: all 0.2s; border-left: 3px solid {{ request()->routeIs('admin.usage.logs') ? '#6366f1' : 'transparent' }};">

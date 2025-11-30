@@ -22,4 +22,34 @@ return function (Schedule $schedule) {
 
     // 🧠 Persistent summary on 1st day at 00:10 AM (right after midnight)
     $schedule->job(new GeneratePersistentSummaries)->monthlyOn(1, '00:10');
+
+    // 🔄 Process subscription renewals daily at 2 AM
+    $schedule->command('subscriptions:process-renewals --days=3')
+        ->dailyAt('02:00')
+        ->name('process-subscription-renewals')
+        ->withoutOverlapping();
+
+    // ⚠️ Handle payment failures hourly
+    $schedule->command('subscriptions:handle-payment-failures')
+        ->hourly()
+        ->name('handle-payment-failures')
+        ->withoutOverlapping();
+
+    // 📧 Send expiration warnings daily at 9 AM
+    $schedule->command('subscriptions:send-expiration-warnings')
+        ->dailyAt('09:00')
+        ->name('send-expiration-warnings')
+        ->withoutOverlapping();
+
+    // 📊 Check usage quotas daily at 10 AM
+    $schedule->command('usage:check-quotas')
+        ->dailyAt('10:00')
+        ->name('check-usage-quotas')
+        ->withoutOverlapping();
+
+    // 🏥 Check AI engine health hourly
+    $schedule->command('engines:check-health')
+        ->hourly()
+        ->name('check-engine-health')
+        ->withoutOverlapping();
 };

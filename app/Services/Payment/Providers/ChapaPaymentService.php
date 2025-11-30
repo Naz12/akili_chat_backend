@@ -220,20 +220,24 @@ class ChapaPaymentService implements PaymentServiceInterface
             $payload = json_decode($rawPayload, true);
             
             // Chapa may send signature in header or we compute it
-            // If signature is provided, verify it
-            if ($signature) {
+            // If signature is provided, verify it - REJECT if mismatch
+            if ($signature && $signingKey) {
                 $computedHash = hash_hmac('sha256', $rawPayload, $signingKey);
                 
                 if (!hash_equals($computedHash, $signature)) {
-                    Log::warning('⚠️ Chapa webhook signature mismatch - attempting without verification', [
+                    Log::error('❌ Chapa webhook signature mismatch - REJECTING webhook', [
                         'provided' => $signature,
                         'computed' => $computedHash,
-                        'note' => 'Chapa may not always send signature. Proceeding with verification.',
                     ]);
-                    // Don't throw - Chapa may not always send signature header
-                    // We'll verify payment status via API instead
+                    throw new \Exception('Invalid webhook signature');
                 } else {
                     Log::info('✅ Chapa webhook signature verified');
+                }
+            } elseif ($signature && !$signingKey) {
+                Log::warning('⚠️ Chapa signature provided but no signing key configured');
+                // If signature is required, reject; otherwise allow (for backward compatibility)
+                if (config('services.chapa.require_signature', false)) {
+                    throw new \Exception('Webhook signature required but signing key not configured');
                 }
             }
 

@@ -286,4 +286,273 @@ class PaymentApiController extends Controller
             return $this->addCorsHeaders($response, $request);
         }
     }
+
+    /**
+     * Get single payment details
+     */
+    public function show(Request $request, $id)
+    {
+        $user = $request->user();
+        
+        $payment = Payment::where('id', $id)
+            ->where('user_id', $user->id)
+            ->firstOrFail();
+
+        $gatewayResponse = json_decode($payment->gateway_response, true);
+        $metadata = is_string($payment->metadata) 
+            ? json_decode($payment->metadata, true) 
+            : ($payment->metadata ?? []);
+
+        $response = response()->json([
+            'id' => $payment->id,
+            'reference' => $payment->reference,
+            'transaction_id' => $payment->transaction_id,
+            'amount' => $payment->amount,
+            'currency' => $payment->currency,
+            'provider' => $payment->provider,
+            'status' => $payment->status,
+            'gateway_response' => $gatewayResponse,
+            'metadata' => $metadata,
+            'created_at' => $payment->created_at->toIso8601String(),
+            'updated_at' => $payment->updated_at->toIso8601String(),
+        ]);
+
+        return $this->addCorsHeaders($response, $request);
+    }
+
+    /**
+     * Retry failed payment
+     */
+    public function retry(Request $request, $id)
+    {
+        $user = $request->user();
+        
+        $payment = Payment::where('id', $id)
+            ->where('user_id', $user->id)
+            ->where('status', 'failed')
+            ->firstOrFail();
+
+        $retryService = app(\App\Services\PaymentRetryService::class);
+        $result = $retryService->retryPayment($payment);
+
+        if ($result['success']) {
+            $response = response()->json([
+                'message' => 'Payment retry initiated',
+                'payment' => $result['payment'],
+            ]);
+        } else {
+            $response = response()->json([
+                'message' => 'Payment retry failed',
+                'error' => $result['error'] ?? 'Unknown error',
+            ], 400);
+        }
+
+        return $this->addCorsHeaders($response, $request);
+    }
+
+    /**
+     * Cancel pending payment
+     */
+    public function cancel(Request $request, $id)
+    {
+        $user = $request->user();
+        
+        $payment = Payment::where('id', $id)
+            ->where('user_id', $user->id)
+            ->where('status', 'pending')
+            ->firstOrFail();
+
+        $payment->update([
+            'status' => 'cancelled',
+            'metadata' => array_merge($payment->metadata ?? [], [
+                'cancelled_at' => now()->toIso8601String(),
+                'cancellation_reason' => $request->input('reason', 'User cancelled'),
+            ]),
+        ]);
+
+        $response = response()->json([
+            'message' => 'Payment cancelled successfully',
+            'payment' => [
+                'id' => $payment->id,
+                'status' => $payment->status,
+            ],
+        ]);
+
+        return $this->addCorsHeaders($response, $request);
+    }
+
+    /**
+     * Request refund for successful payment
+     */
+    public function refund(Request $request, $id)
+    {
+        $request->validate([
+            'amount' => 'sometimes|numeric|min:0.01',
+            'reason' => 'sometimes|string|max:500',
+        ]);
+
+        $user = $request->user();
+        
+        $payment = Payment::where('id', $id)
+            ->where('user_id', $user->id)
+            ->where('status', 'success')
+            ->firstOrFail();
+
+        try {
+            $refundAmount = $request->input('amount');
+            $refundedPayment = $this->paymentManager->refundPayment($payment, $refundAmount);
+
+            $response = response()->json([
+                'message' => 'Refund request processed',
+                'payment' => [
+                    'id' => $refundedPayment->id,
+                    'status' => $refundedPayment->status,
+                    'refund_amount' => $refundAmount ?? $payment->amount,
+                ],
+            ]);
+        } catch (\Exception $e) {
+            $response = response()->json([
+                'message' => 'Refund failed: ' . $e->getMessage(),
+            ], 400);
+        }
+
+        return $this->addCorsHeaders($response, $request);
+    }
+
+    /**
+     * Check refund status
+     */
+    public function refundStatus(Request $request, $id)
+    {
+        $user = $request->user();
+        
+        $payment = Payment::where('id', $id)
+            ->where('user_id', $user->id)
+            ->firstOrFail();
+
+        $isRefunded = $payment->status === 'refunded';
+        $metadata = is_string($payment->metadata) 
+            ? json_decode($payment->metadata, true) 
+            : ($payment->metadata ?? []);
+
+        $response = response()->json([
+            'payment_id' => $payment->id,
+            'is_refunded' => $isRefunded,
+            'refund_status' => $isRefunded ? 'completed' : 'not_refunded',
+            'refund_details' => $metadata['refund_details'] ?? null,
+        ]);
+
+        return $this->addCorsHeaders($response, $request);
+    }
+
+    /**
+     * Download payment receipt as PDF
+     */
+    public function downloadReceipt(Request $request, $id)
+    {
+        $user = $request->user();
+        
+        $payment = Payment::where('id', $id)
+            ->where('user_id', $user->id)
+            ->where('status', 'success')
+            ->firstOrFail();
+
+        // For now, return JSON receipt data
+        // In the future, this could generate an actual PDF
+        $receipt = [
+            'receipt_number' => 'RCP-' . str_pad($payment->id, 8, '0', STR_PAD_LEFT),
+            'payment_id' => $payment->id,
+            'reference' => $payment->reference,
+            'transaction_id' => $payment->transaction_id,
+            'amount' => $payment->amount,
+            'currency' => $payment->currency,
+            'provider' => $payment->provider,
+            'date' => $payment->created_at->toIso8601String(),
+            'user' => [
+                'name' => $user->name,
+                'email' => $user->email,
+            ],
+        ];
+
+        $response = response()->json($receipt);
+        return $this->addCorsHeaders($response, $request);
+    }
+
+    /**
+     * Get payment summary
+     */
+    public function summary(Request $request)
+    {
+        $user = $request->user();
+
+        $totalSpent = Payment::where('user_id', $user->id)
+            ->where('status', 'success')
+            ->sum('amount');
+
+        $successfulCount = Payment::where('user_id', $user->id)
+            ->where('status', 'success')
+            ->count();
+
+        $failedCount = Payment::where('user_id', $user->id)
+            ->where('status', 'failed')
+            ->count();
+
+        $pendingCount = Payment::where('user_id', $user->id)
+            ->where('status', 'pending')
+            ->count();
+
+        $lastPayment = Payment::where('user_id', $user->id)
+            ->latest()
+            ->first();
+
+        $response = response()->json([
+            'total_spent' => $totalSpent,
+            'successful_count' => $successfulCount,
+            'failed_count' => $failedCount,
+            'pending_count' => $pendingCount,
+            'last_payment_date' => $lastPayment?->created_at->toIso8601String(),
+        ]);
+
+        return $this->addCorsHeaders($response, $request);
+    }
+
+    /**
+     * Get upcoming scheduled payments
+     */
+    public function upcoming(Request $request)
+    {
+        $user = $request->user();
+        $region = $this->getRegion($request);
+
+        $subscription = Subscription::with('plan')
+            ->where('user_id', $user->id)
+            ->whereHas('plan', fn($q) => $q->where('region', $region))
+            ->where('is_active', true)
+            ->where('auto_renew', true)
+            ->first();
+
+        if (!$subscription) {
+            return response()->json(['upcoming_payments' => []]);
+        }
+
+        $plan = $subscription->plan;
+        $nextPaymentDate = $subscription->end_date;
+        $paymentMethod = $subscription->metadata['payment_method'] ?? null;
+
+        $response = response()->json([
+            'upcoming_payments' => [
+                [
+                    'subscription_id' => $subscription->id,
+                    'plan_name' => $plan->name,
+                    'amount' => $plan->monthly_price,
+                    'currency' => $plan->currency ?? 'USD',
+                    'payment_date' => $nextPaymentDate->toIso8601String(),
+                    'payment_method' => $paymentMethod,
+                    'days_until_payment' => now()->diffInDays($nextPaymentDate, false),
+                ],
+            ],
+        ]);
+
+        return $this->addCorsHeaders($response, $request);
+    }
 }

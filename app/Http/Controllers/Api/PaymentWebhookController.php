@@ -25,14 +25,35 @@ class PaymentWebhookController extends Controller
         $payload = $request->getContent();
         $signature = $request->header('Stripe-Signature');
 
-        // Save raw webhook
+        // Extract webhook ID for idempotency (Stripe sends event ID)
+        $webhookData = json_decode($payload, true) ?: [];
+        $webhookId = $webhookData['id'] ?? $webhookData['data']['id'] ?? null;
+        $eventId = $webhookData['type'] ?? $webhookData['event'] ?? null;
+        
+        // Save raw webhook (check for duplicates first)
         try {
-            Webhook::create([
-                'provider' => 'stripe',
-                'event_type' => 'payment_webhook',
-                'signature' => $signature,
-                'payload' => json_decode($payload, true) ?: [],
-            ]);
+            $webhook = Webhook::firstOrCreate(
+                [
+                    'provider' => 'stripe',
+                    'webhook_id' => $webhookId,
+                ],
+                [
+                    'event_id' => $eventId,
+                    'event_type' => $eventId ?? 'payment_webhook',
+                    'signature' => $signature,
+                    'payload' => $webhookData,
+                    'processed' => false,
+                ]
+            );
+            
+            // If webhook already exists and was processed, return early
+            if ($webhook->processed) {
+                Log::info('Stripe webhook already processed', [
+                    'webhook_id' => $webhookId,
+                    'processed_at' => $webhook->processed_at,
+                ]);
+                return response()->json(['status' => 'ok', 'message' => 'Webhook already processed'], 200);
+            }
         } catch (\Exception $e) {
             Log::warning('Failed to save webhook log', ['error' => $e->getMessage()]);
         }
@@ -40,6 +61,14 @@ class PaymentWebhookController extends Controller
         try {
             // Stripe needs raw payload string for signature verification
             $payment = $this->paymentManager->processWebhook('stripe', $payload, $signature);
+            
+            // Mark webhook as processed
+            if (isset($webhook)) {
+                $webhook->update([
+                    'processed' => true,
+                    'processed_at' => now(),
+                ]);
+            }
 
             // If payment is null, it means webhook was processed but no payment record exists
             // Return 200 to prevent Stripe from retrying
@@ -164,20 +193,48 @@ class PaymentWebhookController extends Controller
         $payload = $request->all();
         $signature = $request->header('Chapa-Signature');
 
-        // Save raw webhook
+        // Extract webhook ID for idempotency
+        $webhookId = $payload['id'] ?? $payload['webhook_id'] ?? $payload['data']['id'] ?? null;
+        $eventId = $payload['event'] ?? $payload['event_id'] ?? null;
+        
+        // Save raw webhook (check for duplicates first)
         try {
-            Webhook::create([
-                'provider' => 'chapa',
-                'event_type' => $payload['event'] ?? 'payment_webhook',
-                'signature' => $signature,
-                'payload' => $payload,
-            ]);
+            $webhook = Webhook::firstOrCreate(
+                [
+                    'provider' => 'chapa',
+                    'webhook_id' => $webhookId,
+                ],
+                [
+                    'event_id' => $eventId,
+                    'event_type' => $payload['event'] ?? 'payment_webhook',
+                    'signature' => $signature,
+                    'payload' => $payload,
+                    'processed' => false,
+                ]
+            );
+            
+            // If webhook already exists and was processed, return early
+            if ($webhook->processed) {
+                Log::info('Chapa webhook already processed', [
+                    'webhook_id' => $webhookId,
+                    'processed_at' => $webhook->processed_at,
+                ]);
+                return response()->json(['status' => 'ok', 'message' => 'Webhook already processed'], 200);
+            }
         } catch (\Exception $e) {
             Log::warning('Failed to save webhook log', ['error' => $e->getMessage()]);
         }
 
         try {
             $payment = $this->paymentManager->processWebhook('chapa', $payload, $signature);
+            
+            // Mark webhook as processed
+            if (isset($webhook)) {
+                $webhook->update([
+                    'processed' => true,
+                    'processed_at' => now(),
+                ]);
+            }
 
             return response()->json(['status' => 'ok'], 200);
         } catch (\Exception $e) {

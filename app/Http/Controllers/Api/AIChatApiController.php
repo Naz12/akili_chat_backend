@@ -20,10 +20,12 @@ use App\Http\Controllers\Controller;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use App\Services\UsageValidatorService;
 use App\Services\BrainOrchestrator;
 use App\Services\WorkflowComposerService;
 use App\Services\ProactiveSuggestionService;
+use App\Services\GuestUserService;
 use App\Notifications\TokenQuotaWarningNotification;
 
 class AIChatApiController extends Controller
@@ -44,28 +46,41 @@ class AIChatApiController extends Controller
                 'has_session_id' => !empty($request->input('session_id')),
             ]);
             
-            $user   = $request->user();
+            $user = $request->user();
+            $guestSession = null;
+            $isGuest = false;
             
-            // Safety check - should not happen due to auth middleware, but just in case
+            // Support guest users - if no authenticated user, create/get guest session
             if (!$user) {
-                Log::error('User is null in chat endpoint', [
-                    'uri' => $request->getRequestUri(),
-                    'headers' => $request->headers->all(),
-                ]);
-                return response()->json(['error' => 'Unauthenticated'], 401);
+                $guestUserService = app(GuestUserService::class);
+                $guestSession = $guestUserService->getOrCreateGuestSession($request);
+                
+                // Check if guest session is expired (24 hours)
+                if ($guestSession->isExpired()) {
+                    return response()->json([
+                        'error' => 'Guest session expired. Please sign up to continue.',
+                        'redirect' => '/register',
+                    ], 401);
+                }
+                
+                $isGuest = true;
+                Log::info('Guest user detected', ['guest_session_id' => $guestSession->id]);
             }
 
-            // ✅ Prevent execution if quota failed
-            $quotaResult = $usageValidator->checkQuota($user);   // full check
-            if ($quotaResult['error']) {
-                Log::warning('Quota check failed', $quotaResult);
-                return response()->json([
-                    'message'  => [
-                        'role'    => 'assistant',
-                        'content' => $quotaResult['message'],
-                    ],
-                    'redirect' => '/plans',
-                ], 200);   // 200 so chat UI treats it as a normal reply
+            // ✅ Prevent execution if quota failed (for authenticated users only)
+            // Guest users will use default free plan with 24-hour expiration
+            if ($user) {
+                $quotaResult = $usageValidator->checkQuota($user);   // full check
+                if ($quotaResult['error']) {
+                    Log::warning('Quota check failed', $quotaResult);
+                    return response()->json([
+                        'message'  => [
+                            'role'    => 'assistant',
+                            'content' => $quotaResult['message'],
+                        ],
+                        'redirect' => '/plans',
+                    ], 200);   // 200 so chat UI treats it as a normal reply
+                }
             }
 
             $prompt = (string) $request->input('message', '');
@@ -126,38 +141,43 @@ class AIChatApiController extends Controller
             }
 
             // Brain orchestration: auto-detect special inputs (e.g., YouTube links, documents)
-            Log::info('[AIChatApiController] Checking brain orchestrator');
-            $orchestrator = app(BrainOrchestrator::class);
+            // Note: Brain orchestration is only available for authenticated users (not guests)
             $brain = null;
-            
-            // Priority 1: Uploaded file attachment (doc ingestion)
-            if ($file) {
-                Log::info('[AIChatApiController] Processing uploaded file attachment', ['file' => $file]);
-                $brain = $orchestrator->processDocument($file, $user, $prompt);
-                if (!$brain) {
-                    Log::warning('[AIChatApiController] Document processing failed', ['file' => $file]);
-                    // Don't fallback to generic AI for invalid URLs - return helpful error
-                    if (strpos($file, '/attachments/') === false) {
-                        return response()->json([
-                            'error' => 'Invalid attachment URL',
-                            'message' => 'The file attachment URL is incomplete. Please try uploading again.',
-                        ], 400);
+            if ($user) {
+                Log::info('[AIChatApiController] Checking brain orchestrator');
+                $orchestrator = app(BrainOrchestrator::class);
+                
+                // Priority 1: Uploaded file attachment (doc ingestion)
+                if ($file) {
+                    Log::info('[AIChatApiController] Processing uploaded file attachment', ['file' => $file]);
+                    $brain = $orchestrator->processDocument($file, $user, $prompt);
+                    if (!$brain) {
+                        Log::warning('[AIChatApiController] Document processing failed', ['file' => $file]);
+                        // Don't fallback to generic AI for invalid URLs - return helpful error
+                        if (strpos($file, '/attachments/') === false) {
+                            return response()->json([
+                                'error' => 'Invalid attachment URL',
+                                'message' => 'The file attachment URL is incomplete. Please try uploading again.',
+                            ], 400);
+                        }
                     }
                 }
-            }
-            // Priority 2: YouTube URL in prompt
-            elseif (preg_match('/(https?:\/\/(?:www\.)?(?:youtube\.com\/watch\?v=[^\s&]+|youtu\.be\/[A-Za-z0-9_-]+))/i', $prompt, $m)) {
-                Log::info('[AIChatApiController] Fast-path YouTube routing', ['url' => $m[1]]);
-                $brain = $orchestrator->processYouTube($m[1], $user, $prompt);
-            }
-            // Priority 3: Document URL in prompt (no attachment)
-            elseif (preg_match('/https?:\/\/\S+\.(pdf|docx?|rtf|pptx?|xlsx?|txt)\b/i', $prompt, $dm)) {
-                Log::info('[AIChatApiController] Fast-path Document routing', ['url' => $dm[0]]);
-                $brain = $orchestrator->processDocument($dm[0], $user, $prompt);
-            }
-            // Priority 4: General brain orchestrator (other intents)
-            else {
-                $brain = $orchestrator->maybeHandle($prompt, null, $user);
+                // Priority 2: YouTube URL in prompt
+                elseif (preg_match('/(https?:\/\/(?:www\.)?(?:youtube\.com\/watch\?v=[^\s&]+|youtu\.be\/[A-Za-z0-9_-]+))/i', $prompt, $m)) {
+                    Log::info('[AIChatApiController] Fast-path YouTube routing', ['url' => $m[1]]);
+                    $brain = $orchestrator->processYouTube($m[1], $user, $prompt);
+                }
+                // Priority 3: Document URL in prompt (no attachment)
+                elseif (preg_match('/https?:\/\/\S+\.(pdf|docx?|rtf|pptx?|xlsx?|txt)\b/i', $prompt, $dm)) {
+                    Log::info('[AIChatApiController] Fast-path Document routing', ['url' => $dm[0]]);
+                    $brain = $orchestrator->processDocument($dm[0], $user, $prompt);
+                }
+                // Priority 4: General brain orchestrator (other intents)
+                else {
+                    $brain = $orchestrator->maybeHandle($prompt, null, $user);
+                }
+            } else {
+                Log::info('[AIChatApiController] Skipping brain orchestration for guest user');
             }
             
             Log::info('[AIChatApiController] Brain orchestrator result', ['hasResult' => !is_null($brain), 'hasContent' => isset($brain['content'])]);
@@ -357,11 +377,27 @@ class AIChatApiController extends Controller
             }
 
             // 🔐 subscription / engine checks -----------------------------------
-            $subscription = $user->active_subscription;
-            $plan = $subscription?->plan ?? Plan::where('is_default', true)->where('is_active', true)->first();
+            // For guests, use default free plan; for authenticated users, use their subscription
+            if ($isGuest) {
+                $plan = Plan::where('is_default', true)
+                    ->where('is_active', true)
+                    ->where('region', $this->getRegion($request))
+                    ->first();
+                $subscription = null; // Guests don't have subscriptions
+            } else {
+                $subscription = $user->active_subscription;
+                $plan = $subscription?->plan ?? Plan::where('is_default', true)
+                    ->where('is_active', true)
+                    ->where('region', $this->getRegion($request))
+                    ->first();
+            }
             
             if (!$plan) {
-                Log::error('No plan available for user', ['user_id' => $user->id]);
+                Log::error('No plan available', [
+                    'user_id' => $user?->id,
+                    'is_guest' => $isGuest,
+                    'guest_session_id' => $guestSession?->id,
+                ]);
                 return response()->json(['error' => 'No subscription plan available. Please contact support.'], 500);
             }
             
@@ -370,6 +406,60 @@ class AIChatApiController extends Controller
                 Log::error('No active AI engine', ['plan_id' => $plan->id, 'engine_id' => $plan->engine_id]);
                 return response()->json(['error' => 'No active AI engine available'], 500);
             }
+            
+            // Check engine health before using (but be lenient - health checks can be unreliable)
+            $healthService = app(\App\Services\AIEngineHealthService::class);
+            $isHealthy = $healthService->isEngineHealthy($engine, false);
+            
+            // If health check says unhealthy, try a fresh check (health checks can be cached incorrectly)
+            if (!$isHealthy) {
+                Log::warning('Primary engine marked unhealthy in cache, doing fresh check', [
+                    'engine_id' => $engine->id,
+                    'engine_name' => $engine->name,
+                ]);
+                
+                // Do a fresh health check (bypass cache)
+                $isHealthy = $healthService->isEngineHealthy($engine, true);
+            }
+            
+            // If still unhealthy, try fallback engines
+            if (!$isHealthy) {
+                Log::warning('Primary engine unhealthy after fresh check, trying fallback', [
+                    'engine_id' => $engine->id,
+                    'engine_name' => $engine->name,
+                ]);
+                
+                // Try to find a healthy fallback engine
+                $fallbackEngine = AIEngine::where('is_active', true)
+                    ->where('is_fallback', true)
+                    ->where('id', '!=', $engine->id)
+                    ->get()
+                    ->first(function ($fallback) use ($healthService) {
+                        // Try fresh check for fallback too
+                        return $healthService->isEngineHealthy($fallback, true);
+                    });
+                
+                if ($fallbackEngine) {
+                    $engine = $fallbackEngine;
+                    Log::info('Using healthy fallback engine', ['engine_id' => $engine->id]);
+                } else {
+                    // Last resort: if engine is active, try using it anyway (health checks can be wrong)
+                    // Only fail if engine is explicitly inactive
+                    if ($engine->is_active) {
+                        Log::warning('Health check failed but engine is active - proceeding anyway', [
+                            'engine_id' => $engine->id,
+                            'engine_name' => $engine->name,
+                        ]);
+                        // Continue with the engine despite health check failure
+                    } else {
+                        Log::error('No healthy engines available and primary engine is inactive', [
+                            'primary_engine_id' => $engine->id,
+                        ]);
+                        return response()->json(['error' => 'AI service temporarily unavailable'], 503);
+                    }
+                }
+            }
+            
             try {
                 $apiKey = Crypt::decryptString($engine->api_key);
             } catch (\Exception $e) {
@@ -385,20 +475,36 @@ class AIChatApiController extends Controller
             );
             
             if ($sessionId) {
-                $session = ChatSession::firstOrCreate(
-                    ['id' => $sessionId, 'user_id' => $user->id],
-                    ['title' => $title]
-                );
+                if ($isGuest) {
+                    $session = ChatSession::firstOrCreate(
+                        ['id' => $sessionId, 'guest_session_id' => $guestSession->id],
+                        ['title' => $title, 'is_guest' => true]
+                    );
+                } else {
+                    $session = ChatSession::firstOrCreate(
+                        ['id' => $sessionId, 'user_id' => $user->id],
+                        ['title' => $title, 'is_guest' => false]
+                    );
+                }
 
                 // Force title update only if it's still the default
                 if ($session->title === 'Untitled' && $title !== 'Untitled') {
                     $session->update(['title' => $title]);
                 }
             } else {
-                $session = ChatSession::create([
-                    'user_id' => $user->id,
-                    'title'   => $title,
-                ]);
+                if ($isGuest) {
+                    $session = ChatSession::create([
+                        'guest_session_id' => $guestSession->id,
+                        'is_guest' => true,
+                        'title'   => $title,
+                    ]);
+                } else {
+                    $session = ChatSession::create([
+                        'user_id' => $user->id,
+                        'is_guest' => false,
+                        'title'   => $title,
+                    ]);
+                }
             }
             
             // 📜 history + system prompt ---------------------------------------
@@ -485,14 +591,21 @@ class AIChatApiController extends Controller
                     'body' => $res->body(),
                 ]);
                 
-                // Try fallback engine
-                $fallbackEngine = AIEngine::where('is_active', true)
+                // Try fallback engine (skip unhealthy ones)
+                $healthService = app(\App\Services\AIEngineHealthService::class);
+                $fallbackEngines = AIEngine::where('is_active', true)
                     ->where('is_fallback', true)
+                    ->where('id', '!=', $engine->id)
                     ->orderBy('priority_order')
-                    ->first();
+                    ->get()
+                    ->filter(function ($fallback) use ($healthService) {
+                        // Only use healthy fallback engines
+                        return $healthService->isEngineHealthy($fallback, false);
+                    });
                 
-                if ($fallbackEngine && $fallbackEngine->id !== $engine->id) {
-                    Log::info('Trying fallback engine', ['fallback' => $fallbackEngine->name]);
+                if ($fallbackEngines->isNotEmpty()) {
+                    $fallbackEngine = $fallbackEngines->first();
+                    Log::info('Trying healthy fallback engine', ['fallback' => $fallbackEngine->name]);
                     
                     try {
                         $fallbackKey = Crypt::decryptString($fallbackEngine->api_key);
@@ -526,9 +639,7 @@ class AIChatApiController extends Controller
                         return response()->json(['error' => 'AI service unavailable'], 500);
                     }
                 } else {
-                    Log::warning('No fallback engine available', [
-                        'fallback_exists' => $fallbackEngine ? true : false,
-                        'fallback_id' => $fallbackEngine?->id,
+                    Log::warning('No healthy fallback engine available', [
                         'current_engine_id' => $engine->id,
                     ]);
                     return response()->json(['error' => 'AI service unavailable'], 500);
@@ -549,40 +660,73 @@ class AIChatApiController extends Controller
             }
 
             // 💾 persist messages ---------------------------------------------
+            $messageData = [
+                'chat_session_id' => $session->id,
+            ];
+            
+            if ($isGuest) {
+                $messageData['guest_session_id'] = $guestSession->id;
+            } else {
+                $messageData['user_id'] = $user->id;
+            }
+            
             if ($file) {
-                ChatMessage::create([
-                    'chat_session_id' => $session->id,
-                    'user_id'         => $user->id,
+                ChatMessage::create(array_merge($messageData, [
                     'role'            => 'user',
                     'content'         => $file,
                     'is_attachment'   => true,
-                ]);
+                ]));
             }
             if ($prompt) {
-                ChatMessage::create([
-                    'chat_session_id' => $session->id,
-                    'user_id'         => $user->id,
+                ChatMessage::create(array_merge($messageData, [
                     'role'            => 'user',
                     'content'         => $prompt,
-                ]);
+                ]));
             }
-            ChatMessage::create([
-                'chat_session_id' => $session->id,
-                'user_id'         => $user->id,
+            ChatMessage::create(array_merge($messageData, [
                 'role'            => 'assistant',
                 'content'         => $reply,
-            ]);
+            ]));
 
             // 📊 token usage (optional)
-            if (isset($data['usage'])) {
-                TokenUsage::create([
-                    'user_id'       => $user->id,
-                    'chat_session_id' => $session->id,
-                    'engine_id'     => $engine->id,
-                    'subscription_id' => $subscription?->id,
-                    'tokens_used'   => $data['usage']['total_tokens'] ?? 0,
-                    'cost'          => ($engine->price_per_1k ?? 0) * ($data['usage']['total_tokens'] ?? 0) / 1000,
+            // Only track for authenticated users with subscriptions
+            if (isset($data['usage']) && !$isGuest && $subscription) {
+                $tokensUsed = $data['usage']['total_tokens'] ?? 0;
+                $cost = ($engine->price_per_1k ?? 0) * $tokensUsed / 1000;
+                
+                // Use transaction with lock to prevent race conditions
+                DB::transaction(function () use ($user, $session, $engine, $subscription, $tokensUsed, $cost, $prompt, $reply) {
+                    // Lock the subscription row for update
+                    $lockedSubscription = Subscription::where('id', $subscription->id)
+                        ->lockForUpdate()
+                        ->first();
+                    
+                    if ($lockedSubscription) {
+                        // Create token usage record
+                        TokenUsage::create([
+                            'user_id'         => $user->id,
+                            'chat_session_id' => $session->id,
+                            'engine_id'       => $engine->id,
+                            'subscription_id' => $lockedSubscription->id,
+                            'tokens_used'     => $tokensUsed,
+                            'cost'            => $cost,
+                            'prompt'          => substr($prompt ?? '', 0, 65535), // Truncate if too long
+                            'response'        => substr($reply ?? '', 0, 4294967295), // Truncate if too long
+                            'source'          => 'chat',
+                        ]);
+                        
+                        // Atomically increment subscription tokens_used
+                        $lockedSubscription->increment('tokens_used', $tokensUsed);
+                    }
+                });
+            } elseif (isset($data['usage']) && $isGuest) {
+                // For guests, track usage in guest_session metadata (optional, for analytics)
+                $tokensUsed = $data['usage']['total_tokens'] ?? 0;
+                $guestSession->metadata = array_merge($guestSession->metadata ?? [], [
+                    'total_tokens_used' => ($guestSession->metadata['total_tokens_used'] ?? 0) + $tokensUsed,
+                    'last_usage' => now()->toIso8601String(),
                 ]);
+                $guestSession->save();
             }
 
             return response()->json([

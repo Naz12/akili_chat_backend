@@ -32,6 +32,22 @@ Route::prefix('v1')->group(function () {
         Route::prefix($prefix)->group(function () use ($prefix) {
             Route::get('/check-version', [AppVersionApiController::class, 'check']);
 
+            // 💬 AI Chat + Chat History (accessible to guests and authenticated users)
+            Route::prefix('chat')->middleware(['throttle:60,1'])->group(function () {
+                // Only apply quota check to chat creation (allows guests)
+                Route::post('/', [AIChatApiController::class, 'handleChat'])
+                    ->middleware('quota.check'); // POST /chat
+
+                // Chat sessions history (no quota check needed for viewing history)
+                Route::get('/sessions', [AiChatHistoryApiController::class, 'sessions']);
+                Route::get('/messages/{sessionId}', [AiChatHistoryApiController::class, 'messages']);
+                Route::put('/sessions/{sessionId}', [AiChatHistoryApiController::class, 'rename']);
+                Route::delete('/sessions/{sessionId}', [AiChatHistoryApiController::class, 'destroy']);
+                
+                Route::post('/upload', [AIChatApiController::class, 'uploadAttachment'])
+                    ->middleware('quota.check');
+            });
+
             Route::middleware('auth:api')->group(function () use ($prefix) {
                 Route::get('/user', [UserApiController::class, 'profile']);
                 Route::post('/logout', [UserApiController::class, 'logout']);
@@ -44,22 +60,8 @@ Route::prefix('v1')->group(function () {
                     Route::get('/subscription', [SubscriptionApiController::class, 'current']);
                     Route::get('/user/has-subscription', [SubscriptionApiController::class, 'hasSubscription']);
 
-                    // 💬 AI Chat + Chat History
-                    Route::prefix('chat')->middleware(['throttle:60,1'])->group(function () {
-                        // Only apply quota check to chat creation
-                        Route::post('/', [AIChatApiController::class, 'handleChat'])
-                            ->middleware('quota.check'); // POST /chat
-
-                        // Chat sessions history (no quota check needed for viewing history)
-                        Route::get('/sessions', [AiChatHistoryApiController::class, 'sessions']);
-                        Route::get('/messages/{sessionId}', [AiChatHistoryApiController::class, 'messages']);
-                        Route::put('/sessions/{sessionId}', [AiChatHistoryApiController::class, 'rename']);
-                        Route::delete('/sessions/{sessionId}', [AiChatHistoryApiController::class, 'destroy']);
-                        
-                        Route::post('/upload', [AIChatApiController::class, 'uploadAttachment'])
-                            ->middleware('quota.check');
-
-                        // 📤 Chat Session Sharing
+                    // 📤 Chat Session Sharing (requires authentication)
+                    Route::prefix('chat')->group(function () {
                         Route::post('/sessions/{sessionId}/share', [ChatSessionShareController::class, 'share']);
                         Route::get('/shares/incoming', [ChatSessionShareController::class, 'incoming']);
                         Route::get('/shares/outgoing', [ChatSessionShareController::class, 'outgoing']);
@@ -71,6 +73,12 @@ Route::prefix('v1')->group(function () {
                     // 📊 Token Usage
                     Route::get('/token-usage', [TokenUsageApiController::class, 'index']);
                     Route::get('/token-usage/stats', [TokenUsageApiController::class, 'stats']);
+                    Route::get('/token-usage/daily', [TokenUsageApiController::class, 'daily']);
+                    Route::get('/token-usage/weekly', [TokenUsageApiController::class, 'weekly']);
+                    Route::get('/token-usage/monthly', [TokenUsageApiController::class, 'monthly']);
+                    Route::get('/token-usage/analytics', [TokenUsageApiController::class, 'analytics']);
+                    Route::get('/token-usage/quota-status', [TokenUsageApiController::class, 'quotaStatus']);
+                    Route::get('/token-usage/export', [TokenUsageApiController::class, 'export']);
 
                     // 🔔 Notifications
                     Route::get('/notifications', [NotificationApiController::class, 'index']);
@@ -82,6 +90,16 @@ Route::prefix('v1')->group(function () {
                     Route::get('/billing/history', [BillApiController::class, 'history']);
                     Route::get('/billing/usage', [BillApiController::class, 'usage']);
                     Route::post('/billing/toggle-renew', [BillApiController::class, 'toggleAutoRenew']);
+                    Route::get('/billing/invoices', [BillApiController::class, 'invoices']);
+                    Route::get('/billing/invoices/{id}', [BillApiController::class, 'invoice']);
+                    Route::get('/billing/upcoming-charges', [BillApiController::class, 'upcomingCharges']);
+                    Route::get('/billing/payment-methods', [BillApiController::class, 'paymentMethods']);
+                    Route::post('/billing/payment-methods', [BillApiController::class, 'addPaymentMethod']);
+                    Route::delete('/billing/payment-methods/{id}', [BillApiController::class, 'removePaymentMethod']);
+                    Route::put('/billing/payment-methods/{id}/default', [BillApiController::class, 'setDefaultPaymentMethod']);
+                    Route::get('/billing/address', [BillApiController::class, 'billingAddress']);
+                    Route::put('/billing/address', [BillApiController::class, 'billingAddress']);
+                    Route::get('/billing/tax-information', [BillApiController::class, 'taxInformation']);
 
                     // 💰 Region-based Subscription
                     Route::post('/regional-subscribe', [PaymentMethodApiController::class, 'subscribe']);
@@ -93,6 +111,14 @@ Route::prefix('v1')->group(function () {
                     Route::get('/payments/status', [PaymentApiController::class, 'status']);
                     Route::post('/payments/verify', [PaymentApiController::class, 'verify']);
                     Route::get('/payments/history', [PaymentApiController::class, 'history']);
+                    Route::get('/payments/{id}', [PaymentApiController::class, 'show']);
+                    Route::post('/payments/{id}/retry', [PaymentApiController::class, 'retry']);
+                    Route::post('/payments/{id}/cancel', [PaymentApiController::class, 'cancel']);
+                    Route::post('/payments/{id}/refund', [PaymentApiController::class, 'refund']);
+                    Route::get('/payments/{id}/refund-status', [PaymentApiController::class, 'refundStatus']);
+                    Route::get('/payments/{id}/receipt', [PaymentApiController::class, 'downloadReceipt']);
+                    Route::get('/payments/summary', [PaymentApiController::class, 'summary']);
+                    Route::get('/payments/upcoming', [PaymentApiController::class, 'upcoming']);
                     
                     // 🧠 Workflow Insights & Optimization
                     Route::prefix('insights')->group(function () {

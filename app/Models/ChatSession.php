@@ -17,12 +17,23 @@ class ChatSession extends Model
     protected $fillable = [
         'id',
         'user_id',
+        'guest_session_id',
+        'is_guest',
         'title',
+    ];
+
+    protected $casts = [
+        'is_guest' => 'boolean',
     ];
 
     public function user()
     {
         return $this->belongsTo(User::class);
+    }
+
+    public function guestSession()
+    {
+        return $this->belongsTo(GuestSession::class, 'guest_session_id');
     }
 
     public function messages(): HasMany

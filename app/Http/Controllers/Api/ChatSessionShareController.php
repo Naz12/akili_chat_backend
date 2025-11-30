@@ -37,16 +37,65 @@ class ChatSessionShareController extends Controller
     {
         $user = $request->user();
 
-        $request->validate([
-            'email' => 'required_without:user_id|email|exists:users,email',
-            'user_id' => 'required_without:email|exists:users,id',
-            'message' => 'nullable|string|max:500',
-        ]);
+        // Validate request with better error messages
+        try {
+            $request->validate([
+                'email' => 'required_without:user_id|email|exists:users,email',
+                'user_id' => 'required_without:email|exists:users,id',
+                'message' => 'nullable|string|max:500',
+            ], [
+                'email.required_without' => 'Either email or user_id must be provided.',
+                'email.email' => 'The email must be a valid email address.',
+                'email.exists' => 'The specified email does not exist in our system.',
+                'user_id.required_without' => 'Either email or user_id must be provided.',
+                'user_id.exists' => 'The specified user does not exist.',
+                'message.max' => 'The message cannot exceed 500 characters.',
+            ]);
+        } catch (ValidationException $e) {
+            Log::warning('Chat session share validation failed', [
+                'session_id' => $sessionId,
+                'user_id' => $user->id,
+                'request_data' => $request->all(),
+                'errors' => $e->errors(),
+            ]);
+            throw $e;
+        }
 
-        // Validate session belongs to user
-        $session = ChatSession::where('id', $sessionId)
-            ->where('user_id', $user->id)
-            ->firstOrFail();
+        // Validate session exists and belongs to user (not a guest session)
+        $session = ChatSession::where('id', $sessionId)->first();
+
+        if (!$session) {
+            Log::warning('Chat session not found for sharing', [
+                'session_id' => $sessionId,
+                'user_id' => $user->id,
+            ]);
+            return response()->json([
+                'error' => 'Chat session not found.',
+            ], 404);
+        }
+
+        // Check if it's a guest session
+        if ($session->is_guest || $session->guest_session_id) {
+            Log::warning('Attempt to share guest session', [
+                'session_id' => $sessionId,
+                'user_id' => $user->id,
+            ]);
+            return response()->json([
+                'error' => 'Guest sessions cannot be shared. Please ensure the session belongs to your account.',
+            ], 403);
+        }
+
+        // Check if session belongs to user
+        if (!$session->user_id || $session->user_id != $user->id) {
+            Log::warning('Attempt to share session belonging to another user', [
+                'session_id' => $sessionId,
+                'user_id' => $user->id,
+                'session_user_id' => $session->user_id,
+            ]);
+            return response()->json([
+                'error' => 'You do not have permission to share this session.',
+            ], 403);
+        }
 
         // Get user by email or user_id
         if ($request->has('email')) {

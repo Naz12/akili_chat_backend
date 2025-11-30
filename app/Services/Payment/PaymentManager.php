@@ -193,6 +193,45 @@ class PaymentManager
             $webhookData = $paymentService->handleWebhook(is_array($payload) ? $payload : [], $signature);
         }
 
+        // Extract webhook ID and event ID for idempotency
+        $webhookId = $webhookData['id'] ?? $webhookData['webhook_id'] ?? $webhookData['data']['id'] ?? null;
+        $eventId = $webhookData['event'] ?? $webhookData['event_id'] ?? $webhookData['type'] ?? null;
+        
+        // Check for duplicate webhook processing (idempotency)
+        if ($webhookId) {
+            $existingWebhook = \App\Models\Webhook::where('provider', $provider)
+                ->where('webhook_id', $webhookId)
+                ->where('processed', true)
+                ->first();
+            
+            if ($existingWebhook) {
+                Log::info('Webhook already processed (idempotency check)', [
+                    'provider' => $provider,
+                    'webhook_id' => $webhookId,
+                    'original_processed_at' => $existingWebhook->processed_at,
+                ]);
+                
+                // Try to find and return the payment that was already processed
+                $reference = $webhookData['data']['session_id'] 
+                    ?? $webhookData['data']['payment_intent']
+                    ?? $webhookData['data']['transaction_id'] 
+                    ?? $webhookData['data']['tx_ref']
+                    ?? null;
+                
+                if ($reference) {
+                    $payment = Payment::where('reference', $reference)
+                        ->orWhere('transaction_id', $reference)
+                        ->first();
+                    
+                    if ($payment) {
+                        return $payment;
+                    }
+                }
+                
+                throw new \Exception('Webhook already processed');
+            }
+        }
+
         // Find payment by reference or transaction_id
         // Priority: session_id (for checkout.session.completed) > payment_intent/transaction_id > tx_ref
         $reference = $webhookData['data']['session_id'] 

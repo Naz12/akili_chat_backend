@@ -26,8 +26,12 @@ class AppServiceProvider extends ServiceProvider
         // Register User Observer to assign free plan on user creation
         User::observe(UserObserver::class);
         
-        app(Schedule::class)
-        ->command('subscriptions:disable-expired')
-        ->daily(); // or use ->hourly(), ->everyTenMinutes(), etc.
+        // Scheduled tasks are defined in routes/console.php
+        // This ensures the scheduler is booted
+        $schedule = app(Schedule::class);
+        
+        // Ensure expired subscriptions are disabled daily
+        $schedule->command('subscriptions:disable-expired')
+            ->daily();
     }
 }

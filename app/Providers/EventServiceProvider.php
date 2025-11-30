@@ -3,7 +3,9 @@
 namespace App\Providers;
 
 use App\Events\PaymentSucceeded;
+use App\Events\PaymentFailed;
 use App\Listeners\CreateSubscriptionOnPaymentSuccess;
+use App\Listeners\HandlePaymentFailure;
 use Illuminate\Foundation\Support\Providers\EventServiceProvider as ServiceProvider;
 
 class EventServiceProvider extends ServiceProvider
@@ -16,6 +18,12 @@ class EventServiceProvider extends ServiceProvider
     protected $listen = [
         PaymentSucceeded::class => [
             CreateSubscriptionOnPaymentSuccess::class,
+        ],
+        PaymentFailed::class => [
+            HandlePaymentFailure::class,
+        ],
+        \Illuminate\Auth\Events\Registered::class => [
+            \App\Listeners\MigrateGuestSessionsOnSignup::class,
         ],
     ];
 

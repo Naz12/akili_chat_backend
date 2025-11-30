@@ -8,6 +8,7 @@ class TokenUsage extends Model
 {
     protected $fillable = [
         'user_id',
+        'chat_session_id',
         'subscription_id',
         'engine_id',
         'prompt',
@@ -31,5 +32,10 @@ class TokenUsage extends Model
     public function subscription()
     {
         return $this->belongsTo(Subscription::class);
+    }
+
+    public function chatSession()
+    {
+        return $this->belongsTo(ChatSession::class, 'chat_session_id');
     }
 }

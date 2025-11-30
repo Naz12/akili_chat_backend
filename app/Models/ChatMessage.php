@@ -11,6 +11,7 @@ class ChatMessage extends Model
 
     protected $fillable = [
         'user_id',
+        'guest_session_id',
         'chat_session_id', // ✅ replace chat_id
         'role',
         'content',

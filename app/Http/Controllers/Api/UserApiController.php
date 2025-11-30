@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Http\Controllers\API;
+namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
@@ -20,6 +20,22 @@ class UserApiController extends Controller
         }
 
         return response()->json($user);
+    }
+
+    public function logout(Request $request)
+    {
+        $user = $request->user();
+
+        if ($user) {
+            // Invalidate the token (if using JWT, you might want to blacklist it)
+            // For now, we'll just return success since JWT tokens are stateless
+            // If you're using database tokens, you can delete them here
+            Auth::guard('api')->logout();
+        }
+
+        return response()->json([
+            'message' => 'Successfully logged out'
+        ]);
     }
 
     public function index()

@@ -21,6 +21,7 @@ class Plan extends Model
         'description',
         'tag',
         'trial_days',
+        'billing_cycle',
     ];
 
     protected $casts = [
