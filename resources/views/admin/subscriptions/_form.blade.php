@@ -59,13 +59,62 @@
         </label>
     </div>
 
-    <div class="form-check mb-4">
+    <div class="form-check mb-3">
         <input class="form-check-input" type="checkbox" name="auto_renew" id="auto_renew" value="1"
             {{ old('auto_renew', $subscription->auto_renew ?? false) ? 'checked' : '' }}>
         <label class="form-check-label" for="auto_renew">
             Auto Renew
         </label>
     </div>
+
+    @if (isset($subscription))
+        <hr>
+        <h5>Metadata</h5>
+        
+        @php
+            $metadata = $subscription->metadata ?? [];
+        @endphp
+
+        <div class="mb-3">
+            <label>Payment Method</label>
+            <select name="payment_method" class="form-select">
+                <option value="">None</option>
+                <option value="stripe" {{ ($metadata['payment_method'] ?? '') === 'stripe' ? 'selected' : '' }}>Stripe</option>
+                <option value="chapa" {{ ($metadata['payment_method'] ?? '') === 'chapa' ? 'selected' : '' }}>Chapa</option>
+                <option value="telebirr" {{ ($metadata['payment_method'] ?? '') === 'telebirr' ? 'selected' : '' }}>Telebirr</option>
+            </select>
+        </div>
+
+        <div class="mb-3">
+            <label>Stripe Subscription ID</label>
+            <input type="text" name="stripe_subscription_id" class="form-control"
+                value="{{ $metadata['stripe_subscription_id'] ?? '' }}"
+                placeholder="sub_...">
+            <small class="text-muted">Stripe subscription ID for automatic renewals</small>
+        </div>
+
+        <div class="mb-3">
+            <label>Billing Cycle</label>
+            <select name="billing_cycle" class="form-select">
+                <option value="monthly" {{ ($metadata['billing_cycle'] ?? 'monthly') === 'monthly' ? 'selected' : '' }}>Monthly</option>
+                <option value="quarterly" {{ ($metadata['billing_cycle'] ?? '') === 'quarterly' ? 'selected' : '' }}>Quarterly</option>
+                <option value="annual" {{ ($metadata['billing_cycle'] ?? '') === 'annual' ? 'selected' : '' }}>Annual</option>
+            </select>
+        </div>
+
+        <div class="mb-3">
+            <label>Grace Period Ends At</label>
+            <input type="datetime-local" name="grace_period_ends_at" class="form-control"
+                value="{{ $subscription->grace_period_ends_at ? $subscription->grace_period_ends_at->format('Y-m-d\TH:i') : '' }}">
+            <small class="text-muted">Leave empty if no grace period</small>
+        </div>
+
+        <div class="mb-3">
+            <label>Payment Failure Count</label>
+            <input type="number" name="payment_failure_count" class="form-control"
+                value="{{ $subscription->payment_failure_count ?? 0 }}" min="0">
+        </div>
+    @endif
 
     <button class="btn btn-success w-100">
         {{ isset($subscription) ? 'Update' : 'Assign' }} Subscription

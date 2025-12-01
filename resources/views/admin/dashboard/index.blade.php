@@ -77,6 +77,102 @@
             </div>
         </div>
 
+        <!-- Additional Statistics Row -->
+        <div class="row g-4 mb-4">
+            <div class="col-md-3">
+                <div class="card h-100 border-0" style="background: linear-gradient(135deg, #ff6b6b 0%, #ee5a6f 100%); color: white;">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <div>
+                                <h6 class="text-white-50 mb-2" style="font-size: 0.875rem; font-weight: 500;">Pending Bills</h6>
+                                <h2 class="fw-bold mb-0">{{ $pendingBills ?? 0 }}</h2>
+                                @if (isset($overdueBills) && $overdueBills > 0)
+                                    <small class="text-white-50">({{ $overdueBills }} overdue)</small>
+                                @endif
+                            </div>
+                            <div class="p-3 rounded-circle" style="background: rgba(255,255,255,0.2);">
+                                <i class="fas fa-file-invoice" style="font-size: 1.5rem;"></i>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card h-100 border-0" style="background: linear-gradient(135deg, #ffa726 0%, #fb8c00 100%); color: white;">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <div>
+                                <h6 class="text-white-50 mb-2" style="font-size: 0.875rem; font-weight: 500;">Grace Period</h6>
+                                <h2 class="fw-bold mb-0">{{ $gracePeriodCount ?? 0 }}</h2>
+                            </div>
+                            <div class="p-3 rounded-circle" style="background: rgba(255,255,255,0.2);">
+                                <i class="fas fa-clock" style="font-size: 1.5rem;"></i>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card h-100 border-0" style="background: linear-gradient(135deg, #ef5350 0%, #e53935 100%); color: white;">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <div>
+                                <h6 class="text-white-50 mb-2" style="font-size: 0.875rem; font-weight: 500;">Payment Failures</h6>
+                                <h2 class="fw-bold mb-0">{{ $paymentFailures ?? 0 }}</h2>
+                            </div>
+                            <div class="p-3 rounded-circle" style="background: rgba(255,255,255,0.2);">
+                                <i class="fas fa-exclamation-triangle" style="font-size: 1.5rem;"></i>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card h-100 border-0" style="background: linear-gradient(135deg, #42a5f5 0%, #1e88e5 100%); color: white;">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <div>
+                                <h6 class="text-white-50 mb-2" style="font-size: 0.875rem; font-weight: 500;">Today Visitors</h6>
+                                <h2 class="fw-bold mb-0">{{ $todayVisitors ?? 0 }}</h2>
+                                <small class="text-white-50">Total: {{ $totalVisitors ?? 0 }}</small>
+                            </div>
+                            <div class="p-3 rounded-circle" style="background: rgba(255,255,255,0.2);">
+                                <i class="fas fa-users" style="font-size: 1.5rem;"></i>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Alerts Section -->
+        @if (isset($overdueBills) && $overdueBills > 0)
+        <div class="alert alert-danger alert-dismissible fade show" role="alert">
+            <i class="fas fa-exclamation-circle me-2"></i>
+            <strong>Alert:</strong> {{ $overdueBills }} bill(s) are overdue. 
+            <a href="{{ route('admin.billing.index', ['tab' => 'bills', 'status' => 'overdue']) }}" class="alert-link">View overdue bills</a>
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        </div>
+        @endif
+
+        @if (isset($gracePeriodCount) && $gracePeriodCount > 0)
+        <div class="alert alert-warning alert-dismissible fade show" role="alert">
+            <i class="fas fa-clock me-2"></i>
+            <strong>Alert:</strong> {{ $gracePeriodCount }} subscription(s) in grace period. 
+            <a href="{{ route('admin.subscriptions.gracePeriod') }}" class="alert-link">Manage grace period</a>
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        </div>
+        @endif
+
+        @if (isset($expiringSubscriptions) && $expiringSubscriptions > 0)
+        <div class="alert alert-info alert-dismissible fade show" role="alert">
+            <i class="fas fa-calendar-times me-2"></i>
+            <strong>Info:</strong> {{ $expiringSubscriptions }} subscription(s) expiring in the next 7 days. 
+            <a href="{{ route('admin.subscriptions.expiring') }}" class="alert-link">View expiring subscriptions</a>
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        </div>
+        @endif
+
         <!-- System Health & Status -->
         <div class="row g-4">
             <div class="col-md-6">

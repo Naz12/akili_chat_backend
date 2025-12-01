@@ -16,6 +16,7 @@
                 <th>Tokens Used</th>
                 <th>Ads</th>
                 <th>Status</th>
+                <th>Payment Info</th>
                 <th>Actions</th>
             </tr>
         </thead>
@@ -76,10 +77,59 @@
                             $today = \Carbon\Carbon::now();
                             $end = \Carbon\Carbon::parse($s->end_date);
                         @endphp
-                        @if ($today->lte($end))
+                        @if ($s->is_active && $today->lte($end))
                             <span class="badge bg-success">Active</span>
+                        @elseif ($s->is_active)
+                            <span class="badge bg-warning">Active (Expired)</span>
                         @else
-                            <span class="badge bg-danger">Expired</span>
+                            <span class="badge bg-danger">Inactive</span>
+                        @endif
+                        <br>
+                        <small class="text-muted">
+                            Auto Renew: {{ $s->auto_renew ? 'Yes' : 'No' }}
+                        </small>
+                        @if ($s->grace_period_ends_at)
+                            <br>
+                            <small class="text-warning">
+                                <i class="fas fa-exclamation-triangle"></i> Grace: {{ $s->grace_period_ends_at->format('Y-m-d') }}
+                            </small>
+                        @endif
+                        @if ($s->payment_failure_count > 0)
+                            <br>
+                            <small class="text-danger">
+                                <i class="fas fa-times-circle"></i> Failures: {{ $s->payment_failure_count }}
+                            </small>
+                        @endif
+                    </td>
+
+                    <td>
+                        @php
+                            $metadata = $s->metadata ?? [];
+                            $stripeSubId = $metadata['stripe_subscription_id'] ?? null;
+                            $paymentMethod = $metadata['payment_method'] ?? null;
+                        @endphp
+                        
+                        @if ($stripeSubId)
+                            <small class="d-block">
+                                <i class="fab fa-stripe text-primary"></i> 
+                                <a href="https://dashboard.stripe.com/subscriptions/{{ $stripeSubId }}" 
+                                   target="_blank" 
+                                   class="text-decoration-none">
+                                    {{ substr($stripeSubId, 0, 20) }}...
+                                </a>
+                            </small>
+                        @endif
+                        
+                        @if ($paymentMethod)
+                            <small class="d-block text-muted">
+                                Payment: {{ ucfirst($paymentMethod) }}
+                            </small>
+                        @endif
+                        
+                        @if (isset($metadata['renewed_from_subscription_id']))
+                            <small class="d-block text-info">
+                                <i class="fas fa-sync"></i> Renewed from #{{ $metadata['renewed_from_subscription_id'] }}
+                            </small>
                         @endif
                     </td>
 

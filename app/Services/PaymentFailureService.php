@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\Subscription;
 use App\Models\Plan;
+use App\Models\Bill;
 use App\Services\Notification\NotificationService;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\DB;
@@ -26,15 +27,51 @@ class PaymentFailureService
         DB::transaction(function () use ($subscription, $reason) {
             // Set grace period (3 days, configurable)
             $gracePeriodDays = config('subscriptions.grace_period_days', 3);
+            $gracePeriodEndsAt = now()->addDays($gracePeriodDays);
+            
             $subscription->update([
-                'grace_period_ends_at' => now()->addDays($gracePeriodDays),
+                'grace_period_ends_at' => $gracePeriodEndsAt,
                 'payment_failure_count' => ($subscription->payment_failure_count ?? 0) + 1,
             ]);
+
+            $plan = $subscription->plan;
+            $paymentMethod = $subscription->metadata['payment_method'] ?? 'stripe';
+
+            // Create bill for manual payment (if not already exists)
+            $existingBill = Bill::where('subscription_id', $subscription->id)
+                ->where('type', 'renewal_failed')
+                ->where('status', 'pending')
+                ->first();
+
+            if (!$existingBill && $plan->monthly_price > 0) {
+                Bill::create([
+                    'user_id' => $subscription->user_id,
+                    'subscription_id' => $subscription->id,
+                    'type' => 'renewal_failed',
+                    'status' => 'pending',
+                    'amount' => $plan->monthly_price,
+                    'currency' => $plan->currency ?? ($paymentMethod === 'chapa' ? 'ETB' : 'USD'),
+                    'due_date' => $gracePeriodEndsAt,
+                    'description' => "Payment failed for {$plan->name}. Please pay manually to continue.",
+                    'metadata' => [
+                        'plan_id' => $plan->id,
+                        'plan_name' => $plan->name,
+                        'payment_method' => $paymentMethod,
+                        'reason' => $reason,
+                        'grace_period_ends_at' => $gracePeriodEndsAt->toIso8601String(),
+                    ],
+                ]);
+
+                Log::info('Bill created for payment failure', [
+                    'subscription_id' => $subscription->id,
+                    'user_id' => $subscription->user_id,
+                ]);
+            }
 
             Log::info('Payment failure handled - grace period set', [
                 'subscription_id' => $subscription->id,
                 'user_id' => $subscription->user_id,
-                'grace_period_ends_at' => $subscription->grace_period_ends_at,
+                'grace_period_ends_at' => $gracePeriodEndsAt,
                 'failure_count' => $subscription->payment_failure_count,
             ]);
 

@@ -55,6 +55,14 @@ Route::middleware(['auth', AdminMiddleware::class])
 
     // Subscriptions CRUD
     Route::resource('subscriptions', SubscriptionAdminController::class);
+    Route::get('subscriptions/grace-period', [SubscriptionAdminController::class, 'gracePeriod'])->name('subscriptions.gracePeriod');
+    Route::get('subscriptions/payment-failures', [SubscriptionAdminController::class, 'paymentFailures'])->name('subscriptions.paymentFailures');
+    Route::get('subscriptions/expiring', [SubscriptionAdminController::class, 'expiring'])->name('subscriptions.expiring');
+    Route::get('subscriptions/stripe', [SubscriptionAdminController::class, 'stripeSubscriptions'])->name('subscriptions.stripe');
+    Route::post('subscriptions/{subscription}/extend-grace', [SubscriptionAdminController::class, 'extendGracePeriod'])->name('subscriptions.extendGrace');
+    Route::post('subscriptions/{subscription}/process-grace', [SubscriptionAdminController::class, 'processGraceExpiration'])->name('subscriptions.processGrace');
+    Route::post('subscriptions/{subscription}/trigger-renewal', [SubscriptionAdminController::class, 'triggerRenewal'])->name('subscriptions.triggerRenewal');
+    Route::post('subscriptions/{subscription}/reset-failure', [SubscriptionAdminController::class, 'resetFailureCount'])->name('subscriptions.resetFailure');
     
     Route::get('usage-logs', [TokenUsageAdminController::class, 'index'])->name('usage.logs');
 
@@ -67,6 +75,12 @@ Route::middleware(['auth', AdminMiddleware::class])
     Route::get('billing/user/{user}', [BillAdminController::class, 'userHistory'])->name('billing.userHistory');
     Route::get('billing/adjust/{subscription}', [BillAdminController::class, 'editUsage'])->name('billing.editUsage');
     Route::post('billing/adjust/{subscription}', [BillAdminController::class, 'updateUsage'])->name('billing.updateUsage');
+
+    // Bill Management Routes
+    Route::get('bills', [BillAdminController::class, 'bills'])->name('bills.index');
+    Route::get('bills/{bill}', [BillAdminController::class, 'showBill'])->name('bills.show');
+    Route::post('bills/{bill}/mark-paid', [BillAdminController::class, 'markAsPaid'])->name('bills.markPaid');
+    Route::post('bills/{bill}/cancel', [BillAdminController::class, 'cancel'])->name('bills.cancel');
 
     Route::resource('payment-methods', PaymentMethodController::class);
     
@@ -83,6 +97,11 @@ Route::middleware(['auth', AdminMiddleware::class])
 
     Route::get('webhooks', [WebhookLogController::class, 'index'])->name('webhooks.index');
     Route::get('webhooks/{id}', [WebhookLogController::class, 'show'])->name('webhooks.show');
+
+    // Visitor Management
+    Route::get('visitors', [\App\Http\Controllers\Admin\VisitorAdminController::class, 'index'])->name('visitors.index');
+    Route::get('visitors/{visitor}', [\App\Http\Controllers\Admin\VisitorAdminController::class, 'show'])->name('visitors.show');
+    Route::get('visitors/analytics/data', [\App\Http\Controllers\Admin\VisitorAdminController::class, 'analytics'])->name('visitors.analytics');
 
     Route::put('preferences/{preference}', [PreferenceController::class, 'update'])->name('preferences.update');
     Route::get('preferences', [PreferenceController::class, 'index'])->name('preferences.index');

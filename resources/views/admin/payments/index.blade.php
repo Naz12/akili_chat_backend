@@ -1,6 +1,10 @@
 @extends('layouts.admin')
 @section('title', 'Payments')
 
+@php
+    use Illuminate\Support\Str;
+@endphp
+
 @section('content')
     <div class="d-flex justify-content-between align-items-center mb-4">
         <h2 class="fw-bold text-primary"><i class="fas fa-money-bill-wave me-2"></i>Payments</h2>
@@ -64,8 +68,8 @@
 
     <!-- Payments Table -->
     @if ($payments->count())
-        <div class="table-responsive card shadow-sm">
-            <table class="table table-hover mb-0">
+        <div class="table-responsive card shadow-sm" style="overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%;">
+            <table class="table table-hover mb-0" style="width: 100%; table-layout: auto;">
                 <thead class="table-light">
                     <tr>
                         <th>ID</th>
@@ -116,12 +120,34 @@
                                 @endphp
                                 <span class="badge bg-{{ $color }}">{{ ucfirst(str_replace('_', ' ', $payment->status)) }}</span>
                             </td>
-                            <td>
-                                <code class="text-primary">{{ $payment->reference }}</code>
+                            <td style="max-width: 200px;">
+                                <code class="text-primary reference-code" 
+                                      style="cursor: pointer; max-width: 180px; display: inline-block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.85rem;"
+                                      data-reference="{{ htmlspecialchars($payment->reference, ENT_QUOTES, 'UTF-8') }}"
+                                      data-bs-toggle="tooltip"
+                                      data-bs-placement="top"
+                                      title="Click to copy: {{ htmlspecialchars($payment->reference, ENT_QUOTES, 'UTF-8') }}"
+                                      onclick="copyToClipboard({{ json_encode($payment->reference) }}, this)">
+                                    {{ Str::limit($payment->reference, 25) }}
+                                </code>
+                                <small class="text-muted ms-1" style="font-size: 0.7rem; opacity: 0.6;">
+                                    <i class="fas fa-copy"></i>
+                                </small>
                             </td>
-                            <td>
+                            <td style="max-width: 200px;">
                                 @if ($payment->transaction_id)
-                                    <code class="text-muted">{{ $payment->transaction_id }}</code>
+                                    <code class="text-muted transaction-id" 
+                                          style="cursor: pointer; max-width: 180px; display: inline-block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.85rem;"
+                                          data-transaction-id="{{ htmlspecialchars($payment->transaction_id, ENT_QUOTES, 'UTF-8') }}"
+                                          data-bs-toggle="tooltip"
+                                          data-bs-placement="top"
+                                          title="Click to copy: {{ htmlspecialchars($payment->transaction_id, ENT_QUOTES, 'UTF-8') }}"
+                                          onclick="copyToClipboard({{ json_encode($payment->transaction_id) }}, this)">
+                                        {{ Str::limit($payment->transaction_id, 25) }}
+                                    </code>
+                                    <small class="text-muted ms-1" style="font-size: 0.7rem; opacity: 0.6;">
+                                        <i class="fas fa-copy"></i>
+                                    </small>
                                 @else
                                     <span class="text-muted">-</span>
                                 @endif
@@ -194,8 +220,8 @@
         </div>
 
         <!-- Pagination -->
-        <div class="mt-4">
-            {{ $payments->links() }}
+        <div class="mt-4 d-flex justify-content-center">
+            {{ $payments->links('pagination::bootstrap-5') }}
         </div>
     @else
         <div class="card shadow-sm">
@@ -206,4 +232,74 @@
         </div>
     @endif
 @endsection
+
+@push('scripts')
+<script>
+    // Initialize Bootstrap tooltips
+    document.addEventListener('DOMContentLoaded', function() {
+        var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+        var tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
+            return new bootstrap.Tooltip(tooltipTriggerEl);
+        });
+    });
+
+    // Copy to clipboard function
+    function copyToClipboard(text, element) {
+        // Use modern Clipboard API if available
+        if (navigator.clipboard && window.isSecureContext) {
+            navigator.clipboard.writeText(text).then(function() {
+                showCopyFeedback(element);
+            }).catch(function(err) {
+                console.error('Failed to copy:', err);
+                fallbackCopyToClipboard(text, element);
+            });
+        } else {
+            // Fallback for older browsers
+            fallbackCopyToClipboard(text, element);
+        }
+    }
+
+    function fallbackCopyToClipboard(text, element) {
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        textarea.style.left = '-999999px';
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        
+        try {
+            document.execCommand('copy');
+            showCopyFeedback(element);
+        } catch (err) {
+            console.error('Failed to copy:', err);
+            alert('Failed to copy to clipboard');
+        } finally {
+            document.body.removeChild(textarea);
+        }
+    }
+
+    function showCopyFeedback(element) {
+        // Show feedback on icon
+        const icon = element.nextElementSibling;
+        if (icon) {
+            icon.innerHTML = '<i class="fas fa-check text-success"></i>';
+            setTimeout(() => {
+                icon.innerHTML = '<i class="fas fa-copy"></i>';
+            }, 2000);
+        }
+        
+        // Update tooltip to show "Copied!"
+        const tooltip = bootstrap.Tooltip.getInstance(element);
+        if (tooltip) {
+            const originalTitle = element.getAttribute('data-bs-original-title') || element.getAttribute('title');
+            tooltip.setContent({ '.tooltip-inner': '✓ Copied to clipboard!' });
+            setTimeout(() => {
+                tooltip.setContent({ '.tooltip-inner': originalTitle });
+            }, 2000);
+        }
+    }
+</script>
+@endpush
 

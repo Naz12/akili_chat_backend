@@ -33,17 +33,32 @@
             <div class="mb-3">
                 <label class="form-label">Channels</label><br>
                 <div class="form-check form-check-inline">
+                    <input class="form-check-input" type="checkbox" name="channels[]" value="database" checked>
+                    <label class="form-check-label">📋 Database</label>
+                </div>
+                <div class="form-check form-check-inline">
                     <input class="form-check-input" type="checkbox" name="channels[]" value="email" checked>
-                    <label class="form-check-label">Email</label>
+                    <label class="form-check-label">📧 Email</label>
                 </div>
                 <div class="form-check form-check-inline">
                     <input class="form-check-input" type="checkbox" name="channels[]" value="push">
-                    <label class="form-check-label">Push</label>
+                    <label class="form-check-label">🔔 Push (FCM)</label>
+                </div>
+                <div class="form-check form-check-inline">
+                    <input class="form-check-input" type="checkbox" name="channels[]" value="websocket">
+                    <label class="form-check-label">🔌 WebSocket</label>
+                </div>
+                <div class="form-check form-check-inline">
+                    <input class="form-check-input" type="checkbox" name="channels[]" value="webpush">
+                    <label class="form-check-label">🌐 Web Push</label>
                 </div>
                 <div class="form-check form-check-inline">
                     <input class="form-check-input" type="checkbox" name="channels[]" value="sms">
-                    <label class="form-check-label">SMS</label>
+                    <label class="form-check-label">📲 SMS</label>
                 </div>
+                <small class="text-muted d-block mt-2">
+                    <strong>Note:</strong> Channels respect user preferences. WebSocket only works for online users. Web Push requires user subscription.
+                </small>
             </div>
 
             <div class="mb-3">

@@ -283,8 +283,11 @@ class TokenUsageApiController extends Controller
         $tokensPercentage = $maxTokens > 0 ? ($tokensUsed / $maxTokens) * 100 : 0;
 
         $today = now()->toDateString();
+        // Count messages sent after the current subscription started
+        // This ensures the count resets when a plan changes
         $messagesUsed = \App\Models\ChatMessage::where('user_id', $user->id)
-            ->whereDate('created_at', $today)
+            ->where('created_at', '>=', $subscription->start_date) // Only count messages after subscription started
+            ->whereDate('created_at', $today) // Still within today
             ->where('role', 'user')
             ->count();
         $messagesRemaining = max(0, ($plan->daily_message_limit ?? 0) - $messagesUsed);

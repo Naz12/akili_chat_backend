@@ -58,6 +58,53 @@
             {{ $subscriptions->links() }}
         </div>
 
+        {{-- Bills History --}}
+        @if (isset($bills) && $bills->count())
+        <h4 class="mt-5">Bills History</h4>
+        <div class="table-responsive">
+            <table class="table table-bordered table-sm">
+                <thead class="table-light">
+                    <tr>
+                        <th>ID</th>
+                        <th>Type</th>
+                        <th>Status</th>
+                        <th>Amount</th>
+                        <th>Due Date</th>
+                        <th>Paid At</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach ($bills as $bill)
+                        <tr>
+                            <td>{{ $bill->id }}</td>
+                            <td>
+                                <span class="badge bg-info">{{ ucfirst(str_replace('_', ' ', $bill->type)) }}</span>
+                            </td>
+                            <td>
+                                @if ($bill->status === 'paid')
+                                    <span class="badge bg-success">Paid</span>
+                                @elseif ($bill->status === 'pending' && $bill->due_date < now())
+                                    <span class="badge bg-danger">Overdue</span>
+                                @else
+                                    <span class="badge bg-warning">Pending</span>
+                                @endif
+                            </td>
+                            <td>{{ number_format($bill->amount, 2) }} {{ $bill->currency }}</td>
+                            <td>{{ $bill->due_date->format('Y-m-d') }}</td>
+                            <td>{{ $bill->paid_at ? $bill->paid_at->format('Y-m-d H:i') : '-' }}</td>
+                            <td>
+                                <a href="{{ route('admin.bills.show', $bill) }}" class="btn btn-sm btn-outline-primary">
+                                    View
+                                </a>
+                            </td>
+                        </tr>
+                    @endforeach
+                </tbody>
+            </table>
+        </div>
+        @endif
+
         {{-- Token Adjustment History --}}
         <h4 class="mt-5">Token Adjustment History</h4>
         <div class="table-responsive">

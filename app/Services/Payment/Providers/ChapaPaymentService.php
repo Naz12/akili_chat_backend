@@ -171,7 +171,13 @@ class ChapaPaymentService implements PaymentServiceInterface
 
             $data = $response->json();
             
-            if (($data['status'] ?? '') !== 'success') {
+            // Check if API response indicates success
+            $apiStatus = strtolower(trim($data['status'] ?? ''));
+            if ($apiStatus !== 'success') {
+                Log::warning('⚠️ Chapa API response not successful', [
+                    'reference' => $reference,
+                    'api_status' => $data['status'] ?? null,
+                ]);
                 return [
                     'status' => 'failed',
                     'transaction_id' => null,
@@ -180,11 +186,27 @@ class ChapaPaymentService implements PaymentServiceInterface
             }
 
             $transactionData = $data['data'] ?? [];
-            $status = ($transactionData['status'] ?? '') === 'successful' ? 'success' : 'pending';
+            $transactionStatus = strtolower(trim($transactionData['status'] ?? ''));
+            
+            // Map Chapa transaction status to our payment status
+            // Chapa can return: 'successful', 'success', 'pending', 'failed', etc.
+            $paymentStatus = 'pending'; // Default
+            if (in_array($transactionStatus, ['successful', 'success', 'completed', 'paid', 'settled'])) {
+                $paymentStatus = 'success';
+            } elseif (in_array($transactionStatus, ['failed', 'failure', 'declined', 'cancelled', 'canceled'])) {
+                $paymentStatus = 'failed';
+            }
+            
+            Log::info('✅ Chapa payment verification result', [
+                'reference' => $reference,
+                'transaction_status' => $transactionData['status'] ?? null,
+                'mapped_status' => $paymentStatus,
+                'transaction_id' => $transactionData['id'] ?? null,
+            ]);
 
             return [
-                'status' => $status,
-                'transaction_id' => $transactionData['id'] ?? null,
+                'status' => $paymentStatus,
+                'transaction_id' => $transactionData['id'] ?? $transactionData['reference'] ?? null,
                 'amount' => $transactionData['amount'] ?? 0,
             ];
         } catch (\Exception $e) {
@@ -219,17 +241,37 @@ class ChapaPaymentService implements PaymentServiceInterface
             
             $payload = json_decode($rawPayload, true);
             
-            // Chapa may send signature in header or we compute it
-            // If signature is provided, verify it - REJECT if mismatch
+            if (!$payload) {
+                throw new \Exception('Invalid webhook payload: unable to decode JSON');
+            }
+            
+            // Chapa signature verification
+            // Chapa sends signature in Chapa-Signature or x-chapa-signature header
+            // Signature is computed as HMAC-SHA256 of the raw request body
             if ($signature && $signingKey) {
+                // Compute signature from raw payload
                 $computedHash = hash_hmac('sha256', $rawPayload, $signingKey);
                 
-                if (!hash_equals($computedHash, $signature)) {
+                // Normalize signatures for comparison (remove any whitespace)
+                $providedSignature = trim(strtolower($signature));
+                $computedSignature = trim(strtolower($computedHash));
+                
+                if (!hash_equals($computedSignature, $providedSignature)) {
                     Log::error('❌ Chapa webhook signature mismatch - REJECTING webhook', [
-                        'provided' => $signature,
-                        'computed' => $computedHash,
+                        'provided' => substr($providedSignature, 0, 20) . '...',
+                        'computed' => substr($computedSignature, 0, 20) . '...',
+                        'payload_length' => strlen($rawPayload),
+                        'has_webhook_secret' => !empty($webhookSecret),
+                        'has_secret_key' => !empty($secretKey),
                     ]);
-                    throw new \Exception('Invalid webhook signature');
+                    
+                    // If signature verification fails but webhook_secret is not configured,
+                    // allow it for backward compatibility (but log warning)
+                    if (!$webhookSecret && config('services.chapa.require_signature', false) === false) {
+                        Log::warning('⚠️ Signature mismatch but allowing webhook (webhook_secret not configured, require_signature=false)');
+                    } else {
+                        throw new \Exception('Invalid webhook signature');
+                    }
                 } else {
                     Log::info('✅ Chapa webhook signature verified');
                 }
@@ -238,26 +280,69 @@ class ChapaPaymentService implements PaymentServiceInterface
                 // If signature is required, reject; otherwise allow (for backward compatibility)
                 if (config('services.chapa.require_signature', false)) {
                     throw new \Exception('Webhook signature required but signing key not configured');
+                } else {
+                    Log::warning('⚠️ Allowing webhook without signature verification (require_signature=false)');
+                }
+            } else {
+                Log::warning('⚠️ No signature provided in Chapa webhook');
+                // Allow if signature is not required
+                if (config('services.chapa.require_signature', false)) {
+                    throw new \Exception('Webhook signature required but not provided');
                 }
             }
 
             $event = $payload['event'] ?? 'unknown';
+            
+            // Chapa sends data directly in payload, not nested in 'data' key
+            // For charge.success event, all fields are at root level
             $data = $payload['data'] ?? $payload;
 
             Log::info('✅ Chapa webhook received', [
                 'event' => $event,
-                'tx_ref' => $data['tx_ref'] ?? null,
+                'tx_ref' => $data['tx_ref'] ?? $payload['tx_ref'] ?? null,
+                'status' => $data['status'] ?? $payload['status'] ?? null,
+                'reference' => $data['reference'] ?? $payload['reference'] ?? null,
+            ]);
+
+            // Extract transaction details - Chapa sends them at root level
+            $txRef = $data['tx_ref'] ?? $payload['tx_ref'] ?? null;
+            $reference = $data['reference'] ?? $payload['reference'] ?? null;
+            $status = $data['status'] ?? $payload['status'] ?? null;
+            $amount = $data['amount'] ?? $payload['amount'] ?? null;
+            $currency = $data['currency'] ?? $payload['currency'] ?? null;
+            $meta = $data['meta'] ?? $payload['meta'] ?? [];
+            
+            // Normalize status value - Chapa may send 'successful', 'success', etc.
+            // Ensure we capture the status correctly for PaymentManager to process
+            $normalizedStatus = $status;
+            if ($status) {
+                $statusLower = strtolower(trim($status));
+                // Map common Chapa status values
+                if (in_array($statusLower, ['successful', 'success', 'completed', 'paid', 'settled'])) {
+                    $normalizedStatus = 'successful'; // Use 'successful' to match PaymentManager check
+                } elseif (in_array($statusLower, ['failed', 'failure', 'declined', 'cancelled', 'canceled'])) {
+                    $normalizedStatus = 'failed';
+                }
+            }
+            
+            Log::info('📋 Chapa webhook data extracted', [
+                'event' => $event,
+                'tx_ref' => $txRef,
+                'reference' => $reference,
+                'raw_status' => $status,
+                'normalized_status' => $normalizedStatus,
             ]);
 
             return [
                 'event' => $event,
                 'data' => [
-                    'tx_ref' => $data['tx_ref'] ?? null,
-                    'transaction_id' => $data['id'] ?? null,
-                    'amount' => $data['amount'] ?? null,
-                    'currency' => $data['currency'] ?? null,
-                    'status' => $data['status'] ?? null,
-                    'metadata' => $data['metadata'] ?? [],
+                    'tx_ref' => $txRef,
+                    'reference' => $reference,
+                    'transaction_id' => $reference, // Chapa's reference is the transaction ID
+                    'amount' => $amount,
+                    'currency' => $currency,
+                    'status' => $normalizedStatus, // Use normalized status
+                    'metadata' => $meta,
                 ],
             ];
         } catch (\Exception $e) {

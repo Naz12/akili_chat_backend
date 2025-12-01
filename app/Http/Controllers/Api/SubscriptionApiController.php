@@ -32,16 +32,34 @@ class SubscriptionApiController extends Controller
     {
         $request->validate([
             'plan_id' => 'required|exists:plans,id',
-            'payment_method' => 'nullable|string', // Required only for paid plans
+            'payment_method' => 'nullable|string|in:stripe,chapa,telebirr', // Optional - will be auto-selected based on region
         ]);
     
         $user   = $request->user();
         $region = $this->getRegion($request);
+        
+        // Use user's region from database if available, otherwise use route region
+        $userRegion = $user->region ?? $region;
     
         $plan = Plan::where('id', $request->plan_id)
             ->where('region', $region)
             ->with('aiEngine')
-            ->firstOrFail();
+            ->first();
+            
+        if (!$plan) {
+            // Check if plan exists but wrong region
+            $planExists = Plan::where('id', $request->plan_id)->exists();
+            if ($planExists) {
+                $response = response()->json([
+                    'message' => 'Plan not available for your region. Please select a plan for ' . $region . ' region.',
+                ], 422);
+            } else {
+                $response = response()->json([
+                    'message' => 'Plan not found.',
+                ], 422);
+            }
+            return $this->addCorsHeaders($response, $request);
+        }
     
         // Free plan: no payment required
         if ($plan->monthly_price == 0) {
@@ -50,9 +68,10 @@ class SubscriptionApiController extends Controller
                 ->exists();
     
             if ($hasUsedTrial) {
-                return response()->json([
+                $response = response()->json([
                     'message' => 'Trial plan already used. Please select a paid plan.',
                 ], 403);
+                return $this->addCorsHeaders($response, $request);
             }
     
             // Prevent multiple active subscriptions with transaction lock
@@ -93,21 +112,43 @@ class SubscriptionApiController extends Controller
                 ]);
             });
     
-            return response()->json([
+            $response = response()->json([
                 'message' => 'Free subscription activated.',
                 'subscription' => new SubscriptionResource($subscription->load('plan.aiEngine')),
             ]);
+            return $this->addCorsHeaders($response, $request);
         }
     
-        // Paid plan: require valid payment method
-        if (!$request->payment_method) {
-            return response()->json([
-                'message' => 'Payment method is required for paid plans.',
+        // Paid plan: auto-select payment method based on region if not provided
+        $paymentMethod = $request->payment_method;
+        
+        if (!$paymentMethod) {
+            // Auto-select based on user's region: Stripe for intl, Chapa for local
+            if ($userRegion === 'intl') {
+                $paymentMethod = 'stripe';
+                Log::info('Auto-selected Stripe for international user', [
+                    'user_id' => $user->id,
+                    'region' => $userRegion,
+                ]);
+            } else {
+                $paymentMethod = 'chapa';
+                Log::info('Auto-selected Chapa for local user', [
+                    'user_id' => $user->id,
+                    'region' => $userRegion,
+                ]);
+            }
+        }
+        
+        // Validate payment method is supported
+        if (!in_array($paymentMethod, ['stripe', 'chapa', 'telebirr'])) {
+            $response = response()->json([
+                'message' => 'Unsupported payment method. Use "stripe" for international or "chapa" for local.',
             ], 422);
+            return $this->addCorsHeaders($response, $request);
         }
     
         // Prevent multiple active subscriptions with transaction lock
-        $subscription = DB::transaction(function () use ($user, $plan, $request) {
+        $subscription = DB::transaction(function () use ($user, $plan, $request, $paymentMethod) {
             // Lock user's subscriptions to prevent race conditions
             $existingActive = Subscription::where('user_id', $user->id)
                 ->where('is_active', true)
@@ -140,22 +181,24 @@ class SubscriptionApiController extends Controller
                 'is_active'   => false,
                 'auto_renew'  => true,
                 'metadata'    => [
-                    'payment_method' => $request->payment_method,
+                    'payment_method' => $paymentMethod,
                     'billing_cycle' => $billingCycle,
+                    'auto_selected' => !$request->payment_method, // Track if we auto-selected
                 ],
             ]);
         });
     
         // Redirect/return appropriate payment flow
-        if ($request->payment_method === 'telebirr') {
+        if ($paymentMethod === 'telebirr') {
             return $this->initiateTelebirrPayment($user, $plan, $subscription);
         }
     
-        if (in_array($request->payment_method, ['stripe', 'chapa'])) {
-            return $this->initiatePayment($user, $plan, $subscription, $request->payment_method);
+        if (in_array($paymentMethod, ['stripe', 'chapa'])) {
+            return $this->initiatePayment($user, $plan, $subscription, $paymentMethod);
         }
     
-        return response()->json(['message' => 'Unsupported payment method.'], 422);
+        $response = response()->json(['message' => 'Unsupported payment method.'], 422);
+        return $this->addCorsHeaders($response, $request);
     }
     
 
@@ -167,9 +210,13 @@ class SubscriptionApiController extends Controller
         $user   = $request->user();
         $region = $this->getRegion($request);
 
+        // Filter by region to ensure we get the correct subscription for the user's region
         $subscription = Subscription::with('plan.aiEngine')
             ->where('user_id', $user->id)
+            ->whereHas('plan', fn($q) => $q->where('region', $region))
             ->where('is_active', true)
+            ->whereDate('end_date', '>=', now()) // Also check that subscription hasn't expired
+            ->orderByDesc('end_date') // Get the most recent active subscription
             ->first();
 
         if (!$subscription) {
@@ -179,10 +226,11 @@ class SubscriptionApiController extends Controller
                 ->first();
 
             if (!$defaultPlan) {
-                return response()->json(['message' => 'No default plan is configured.'], 500);
+                $response = response()->json(['message' => 'No default plan is configured.'], 500);
+                return $this->addCorsHeaders($response, $request);
             }
 
-            return response()->json([
+            $response = response()->json([
                 'subscription' => null,
                 'plan' => [
                     'id' => $defaultPlan->id,
@@ -200,9 +248,12 @@ class SubscriptionApiController extends Controller
                     ],
                 ],
             ]);
+            return $this->addCorsHeaders($response, $request);
         }
 
-        return new SubscriptionResource($subscription);
+        $resource = new SubscriptionResource($subscription);
+        $response = response()->json($resource->toArray($request));
+        return $this->addCorsHeaders($response, $request);
     }
 
     /**
@@ -246,8 +297,7 @@ class SubscriptionApiController extends Controller
     protected function initiatePayment($user, $plan, $subscription, $provider)
     {
         try {
-            // Create payment using PaymentManager
-            $payment = $this->paymentManager->initiatePayment($user, [
+            $paymentData = [
                 'amount' => $plan->monthly_price,
                 'currency' => $plan->currency ?? 'USD',
                 'provider' => $provider,
@@ -257,7 +307,37 @@ class SubscriptionApiController extends Controller
                     'description' => "Subscription to {$plan->name}",
                 ],
                 'description' => "Subscription to {$plan->name}",
-            ]);
+            ];
+
+            // For Stripe international users, create subscription checkout
+            if ($provider === 'stripe' && $user->region === 'intl') {
+                $stripeService = app(\App\Services\Payment\Providers\StripePaymentService::class);
+                
+                // Create or get Stripe Customer
+                $customerId = $stripeService->getOrCreateCustomer(
+                    $user->email,
+                    $user->name,
+                    [
+                        'user_id' => $user->id,
+                        'plan_id' => $plan->id,
+                        'subscription_id' => $subscription->id,
+                    ]
+                );
+
+                // Add subscription-specific data
+                $paymentData['is_subscription'] = true;
+                $paymentData['customer_id'] = $customerId;
+                $paymentData['billing_cycle'] = $plan->billing_cycle ?? 'monthly';
+
+                Log::info('Creating Stripe subscription checkout', [
+                    'user_id' => $user->id,
+                    'customer_id' => $customerId,
+                    'plan_id' => $plan->id,
+                ]);
+            }
+
+            // Create payment using PaymentManager
+            $payment = $this->paymentManager->initiatePayment($user, $paymentData);
 
             // Get checkout URL from gateway response
             $gatewayResponse = json_decode($payment->gateway_response, true);

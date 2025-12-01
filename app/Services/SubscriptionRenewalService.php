@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\Subscription;
 use App\Models\Plan;
+use App\Models\Bill;
 use App\Services\Payment\PaymentManager;
 use App\Jobs\ProcessRenewalPayment;
 use Illuminate\Support\Facades\Log;
@@ -85,15 +86,98 @@ class SubscriptionRenewalService
             return $this->renewFreeSubscription($subscription);
         }
 
-        // For paid plans, check if payment method exists
-        // For now, we'll dispatch a job to handle payment
-        // In the future, this could check for saved payment methods
-        ProcessRenewalPayment::dispatch($subscription);
+        // Get payment method from subscription metadata
+        $paymentMethod = $subscription->metadata['payment_method'] ?? null;
+        
+        // For Chapa (manual renewal), create a bill for user to pay
+        if ($paymentMethod === 'chapa' || $paymentMethod === 'telebirr') {
+            return $this->createManualRenewalBill($subscription);
+        }
 
-        return [
-            'success' => true,
-            'message' => 'Renewal payment job dispatched',
-        ];
+        // For Stripe, check if we have Stripe Subscription (automatic renewal)
+        // If not, create manual renewal bill as fallback
+        $stripeSubscriptionId = $subscription->metadata['stripe_subscription_id'] ?? null;
+        
+        if ($paymentMethod === 'stripe' && $stripeSubscriptionId) {
+            // Stripe handles automatic renewal via webhooks
+            // If we reach here, it means automatic renewal might have failed
+            // Create a manual renewal bill as fallback
+            return $this->createManualRenewalBill($subscription);
+        }
+
+        // Default: create manual renewal bill
+        return $this->createManualRenewalBill($subscription);
+    }
+
+    /**
+     * Create a bill for manual renewal (Chapa or Stripe fallback)
+     */
+    protected function createManualRenewalBill(Subscription $subscription): array
+    {
+        try {
+            // Check if bill already exists for this subscription
+            $existingBill = Bill::where('subscription_id', $subscription->id)
+                ->where('type', 'renewal')
+                ->where('status', 'pending')
+                ->first();
+
+            if ($existingBill) {
+                Log::info('Bill already exists for subscription renewal', [
+                    'subscription_id' => $subscription->id,
+                    'bill_id' => $existingBill->id,
+                ]);
+
+                return [
+                    'success' => true,
+                    'message' => 'Renewal bill already exists',
+                    'bill_id' => $existingBill->id,
+                ];
+            }
+
+            $plan = $subscription->plan;
+            $paymentMethod = $subscription->metadata['payment_method'] ?? 'chapa';
+
+            $bill = Bill::create([
+                'user_id' => $subscription->user_id,
+                'subscription_id' => $subscription->id,
+                'type' => 'renewal',
+                'status' => 'pending',
+                'amount' => $plan->monthly_price,
+                'currency' => $plan->currency ?? ($paymentMethod === 'chapa' ? 'ETB' : 'USD'),
+                'due_date' => $subscription->end_date,
+                'description' => "Renewal for {$plan->name}",
+                'metadata' => [
+                    'plan_id' => $plan->id,
+                    'plan_name' => $plan->name,
+                    'payment_method' => $paymentMethod,
+                    'billing_cycle' => $plan->billing_cycle ?? 'monthly',
+                ],
+            ]);
+
+            Log::info('Manual renewal bill created', [
+                'bill_id' => $bill->id,
+                'subscription_id' => $subscription->id,
+                'user_id' => $subscription->user_id,
+                'amount' => $bill->amount,
+                'due_date' => $bill->due_date,
+            ]);
+
+            return [
+                'success' => true,
+                'message' => 'Renewal bill created. User can pay manually.',
+                'bill_id' => $bill->id,
+            ];
+        } catch (\Exception $e) {
+            Log::error('Failed to create manual renewal bill', [
+                'subscription_id' => $subscription->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return [
+                'success' => false,
+                'reason' => $e->getMessage(),
+            ];
+        }
     }
 
     /**

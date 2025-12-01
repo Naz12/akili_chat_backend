@@ -57,7 +57,7 @@ class AddCorsHeaders
         }
         
         $response->headers->set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
-        $response->headers->set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin, X-Guest-UUID, X-CSRF-TOKEN, Referer, User-Agent, post');
+        $response->headers->set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin, X-Guest-UUID, X-CSRF-TOKEN, Referer, User-Agent, X-Session-ID, post, put, PATCH, DELETE');
         $response->headers->set('Access-Control-Max-Age', '86400');
         
         return $response;
@@ -85,7 +85,7 @@ class AddCorsHeaders
         }
         
         $response->headers->set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
-        $response->headers->set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin, X-Guest-UUID, X-CSRF-TOKEN, Referer, User-Agent, post');
+        $response->headers->set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin, X-Guest-UUID, X-CSRF-TOKEN, Referer, User-Agent, X-Session-ID, post, put, PATCH, DELETE');
     }
 }
 

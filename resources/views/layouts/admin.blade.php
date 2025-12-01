@@ -21,24 +21,37 @@
             --sidebar-hover: #334155;
         }
 
+        html {
+            overflow-x: hidden;
+        }
+
         body {
             min-height: 100vh;
             display: flex;
             flex-direction: column;
             background-color: #f8fafc;
             font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            overflow-x: hidden;
+            width: 100%;
+            max-width: 100vw;
         }
 
         .admin-wrapper {
             flex: 1;
             display: flex;
+            width: 100%;
+            overflow-x: hidden;
         }
 
         .main-content {
             margin-left: var(--sidebar-width);
             padding: 24px;
-            width: 100%;
+            width: calc(100vw - var(--sidebar-width));
+            max-width: calc(100vw - var(--sidebar-width));
             transition: margin-left 0.3s ease;
+            overflow-x: auto;
+            box-sizing: border-box;
+            position: relative;
         }
 
         /* Card enhancements */
@@ -58,6 +71,16 @@
         .table {
             border-radius: 8px;
             overflow: hidden;
+        }
+
+        .table-responsive {
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+        }
+
+        .table-responsive table {
+            min-width: 100%;
+            width: max-content;
         }
 
         .table thead th {
@@ -124,6 +147,8 @@
             .main-content {
                 margin-left: 0;
                 padding: 16px;
+                width: 100%;
+                max-width: 100%;
             }
         }
 
@@ -138,12 +163,16 @@
             margin: 0 2px;
             color: #6366f1;
             border: 1px solid #e2e8f0;
-            padding: 8px 12px;
+            padding: 6px 12px;
+            font-size: 0.875rem;
+            min-width: 38px;
+            text-align: center;
         }
 
         .pagination .page-link:hover {
             background-color: #f1f5f9;
             color: #4338ca;
+            border-color: #cbd5e1;
         }
 
         .pagination .page-item.active .page-link {
@@ -156,6 +185,15 @@
             background-color: #f8fafc;
             border-color: #e2e8f0;
             color: #cbd5e1;
+            cursor: not-allowed;
+            opacity: 0.6;
+        }
+
+        /* Fix for pagination arrows - make them smaller and consistent */
+        .pagination .page-link[aria-label*="previous"],
+        .pagination .page-link[aria-label*="next"] {
+            padding: 6px 10px;
+            font-size: 0.875rem;
         }
     </style>
 

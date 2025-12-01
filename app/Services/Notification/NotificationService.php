@@ -8,6 +8,8 @@ use App\Services\Notification\Channels\DatabaseChannel;
 use App\Services\Notification\Channels\EmailChannel;
 use App\Services\Notification\Channels\PushChannel;
 use App\Services\Notification\Channels\SmsChannel;
+use App\Services\Notification\Channels\WebSocketChannel;
+use App\Services\Notification\Channels\WebPushChannel;
 use Illuminate\Notifications\Notification;
 use Illuminate\Support\Facades\Log;
 
@@ -26,6 +28,8 @@ class NotificationService
     const CHANNEL_EMAIL = 'email';
     const CHANNEL_PUSH = 'push';
     const CHANNEL_SMS = 'sms';
+    const CHANNEL_WEBSOCKET = 'websocket';
+    const CHANNEL_WEBPUSH = 'webpush';
 
     /**
      * Channel handlers
@@ -36,13 +40,17 @@ class NotificationService
         DatabaseChannel $databaseChannel,
         EmailChannel $emailChannel,
         PushChannel $pushChannel,
-        SmsChannel $smsChannel
+        SmsChannel $smsChannel,
+        WebSocketChannel $webSocketChannel,
+        WebPushChannel $webPushChannel
     ) {
         $this->channels = [
             self::CHANNEL_DATABASE => $databaseChannel,
             self::CHANNEL_EMAIL => $emailChannel,
             self::CHANNEL_PUSH => $pushChannel,
             self::CHANNEL_SMS => $smsChannel,
+            self::CHANNEL_WEBSOCKET => $webSocketChannel,
+            self::CHANNEL_WEBPUSH => $webPushChannel,
         ];
     }
 
@@ -159,6 +167,8 @@ class NotificationService
             self::CHANNEL_EMAIL => (bool) $preference->allow_marketing_email,
             self::CHANNEL_PUSH => (bool) ($preference->allow_push_notifications && $user->fcm_token),
             self::CHANNEL_SMS => (bool) ($preference->allow_sms && $user->phone),
+            self::CHANNEL_WEBSOCKET => true, // Always allowed if user is online (checked separately)
+            self::CHANNEL_WEBPUSH => (bool) $preference->allow_push_notifications, // Uses same preference as FCM push
             default => false,
         };
     }

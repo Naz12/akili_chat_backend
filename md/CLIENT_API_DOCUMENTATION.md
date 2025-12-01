@@ -1365,6 +1365,8 @@ Get upcoming scheduled payments (for subscriptions).
 
 ## Notifications
 
+> **NEW:** Real-time WebSocket notifications and Web Push API are now available! See [Frontend Notifications Integration Guide](./FRONTEND_NOTIFICATIONS_INTEGRATION.md) for complete setup instructions.
+
 ### Get Notifications
 
 Get user's notifications.
@@ -1420,6 +1422,176 @@ Mark all notifications as read.
 ```json
 {
   "status": "all marked as read"
+}
+```
+
+---
+
+## WebSocket Real-Time Notifications (NEW)
+
+### Get WebSocket Configuration
+
+Get WebSocket connection details for real-time notifications.
+
+**Endpoint:** `GET /{region}/websocket/config`
+
+**Authentication:** Required
+
+**Response:**
+```json
+{
+  "websocket_url": "wss://chat.akmicroservice.com/app/",
+  "user_id": 1,
+  "channel": "private-user.1"
+}
+```
+
+**Usage:**
+- Use this to get the WebSocket URL and user channel
+- Connect to the WebSocket server using Laravel Echo or similar
+- Listen to the private channel for real-time notifications
+
+### Authenticate WebSocket Connection
+
+Authenticate WebSocket connection (called automatically by WebSocket client libraries).
+
+**Endpoint:** `POST /{region}/websocket/authenticate`
+
+**Authentication:** Required
+
+**Body:**
+```json
+{
+  "channel_name": "private-user.1",
+  "socket_id": "123.456"
+}
+```
+
+**Response:**
+```json
+{
+  "auth": "akili-chat-key:signature"
+}
+```
+
+---
+
+## Web Push API (NEW)
+
+### Get VAPID Public Key
+
+Get the VAPID public key required for Web Push subscription. This key must be retrieved from the backend and used when subscribing to push notifications.
+
+**Endpoint:** `GET /{region}/webpush/vapid-key`
+
+**Authentication:** Required
+
+**Response:**
+```json
+{
+  "vapid_public_key": "BKxVx..."
+}
+```
+
+**Error Response (if not configured):**
+```json
+{
+  "error": "VAPID public key not configured",
+  "message": "Web Push is not available. Please contact support."
+}
+```
+
+**Usage:**
+```javascript
+// Get VAPID key before subscribing
+const response = await fetch('/api/v1/local/webpush/vapid-key', {
+  headers: { 'Authorization': `Bearer ${token}` }
+});
+const { vapid_public_key } = await response.json();
+
+// Use it when subscribing
+const subscription = await registration.pushManager.subscribe({
+  userVisibleOnly: true,
+  applicationServerKey: urlBase64ToUint8Array(vapid_public_key)
+});
+```
+
+---
+
+### Subscribe to Web Push Notifications
+
+Register a browser push subscription to receive notifications even when the browser tab is closed.
+
+**Endpoint:** `POST /{region}/webpush/subscribe`
+
+**Authentication:** Required
+
+**Body:**
+```json
+{
+  "endpoint": "https://fcm.googleapis.com/fcm/send/...",
+  "keys": {
+    "p256dh": "base64-encoded-p256dh-key",
+    "auth": "base64-encoded-auth-key"
+  }
+}
+```
+
+**Response:**
+```json
+{
+  "status": "subscribed",
+  "subscription_id": 1
+}
+```
+
+**How to get subscription:**
+1. Request notification permission: `Notification.requestPermission()`
+2. Register service worker
+3. Subscribe: `registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: vapidPublicKey })`
+4. Send subscription to this endpoint
+
+### Unsubscribe from Web Push
+
+Remove a browser push subscription.
+
+**Endpoint:** `POST /{region}/webpush/unsubscribe`
+
+**Authentication:** Required
+
+**Body:**
+```json
+{
+  "endpoint": "https://fcm.googleapis.com/fcm/send/..."
+}
+```
+
+**Response:**
+```json
+{
+  "status": "unsubscribed"
+}
+```
+
+### Get Web Push Subscriptions
+
+Get all active Web Push subscriptions for the authenticated user.
+
+**Endpoint:** `GET /{region}/webpush/subscriptions`
+
+**Authentication:** Required
+
+**Response:**
+```json
+{
+  "subscriptions": [
+    {
+      "id": 1,
+      "endpoint": "https://fcm.googleapis.com/fcm/send/...",
+      "created_at": "2025-12-01T09:00:00.000000Z"
+    }
+  ],
+  "count": 1
 }
 ```
 

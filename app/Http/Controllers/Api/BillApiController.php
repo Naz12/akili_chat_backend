@@ -5,12 +5,18 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\SubscriptionResource;
 use App\Models\Subscription;
+use App\Models\Plan;
+use App\Models\Bill;
+use App\Services\Payment\PaymentManager;
 use Illuminate\Http\Request;
 use App\Traits\DetectsRegion;
+use App\Traits\AddsCorsHeaders;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\DB;
 
 class BillApiController extends Controller
 {
-    use DetectsRegion;
+    use DetectsRegion, AddsCorsHeaders;
 
     /**
      * Get current active subscription for authenticated user.
@@ -24,13 +30,46 @@ class BillApiController extends Controller
             ->where('user_id', $user->id)
             ->whereHas('plan', fn($q) => $q->where('region', $region))
             ->where('is_active', true)
+            ->whereDate('end_date', '>=', now()) // Also check that subscription hasn't expired
+            ->orderByDesc('end_date') // Get the most recent active subscription
             ->first();
 
         if (!$subscription) {
-            return response()->json(['message' => 'No active subscription.'], 404);
+            // Return default plan structure instead of 404 to match SubscriptionApiController
+            $defaultPlan = Plan::where('region', $region)
+                ->where('is_default', true)
+                ->with('aiEngine')
+                ->first();
+
+            if (!$defaultPlan) {
+                $response = response()->json(['message' => 'No default plan is configured.'], 500);
+                return $this->addCorsHeaders($response, $request);
+            }
+
+            $response = response()->json([
+                'subscription' => null,
+                'plan' => [
+                    'id' => $defaultPlan->id,
+                    'name' => $defaultPlan->name,
+                    'max_tokens' => $defaultPlan->max_tokens,
+                    'daily_message_limit' => $defaultPlan->daily_message_limit,
+                    'ads_enabled' => $defaultPlan->ads_enabled,
+                    'is_guest_mode' => true,
+                    'engine' => [
+                        'name' => optional($defaultPlan->aiEngine)->name,
+                        'provider' => optional($defaultPlan->aiEngine)->provider,
+                        'max_tokens' => optional($defaultPlan->aiEngine)->max_tokens,
+                        'price_per_1k' => optional($defaultPlan->aiEngine)->price_per_1k,
+                        'is_vision_support' => optional($defaultPlan->aiEngine)->is_vision_support,
+                    ],
+                ],
+            ]);
+            return $this->addCorsHeaders($response, $request);
         }
 
-        return new SubscriptionResource($subscription);
+        $resource = new SubscriptionResource($subscription);
+        $response = response()->json($resource->toArray($request));
+        return $this->addCorsHeaders($response, $request);
     }
 
     /**
@@ -64,18 +103,38 @@ class BillApiController extends Controller
             ->where('user_id', $user->id)
             ->whereHas('plan', fn($q) => $q->where('region', $region))
             ->where('is_active', true)
+            ->whereDate('end_date', '>=', now()) // Ensure subscription hasn't expired
+            ->orderByDesc('end_date') // Get the most recent active subscription
             ->first();
 
         if (!$active) {
-            return response()->json(['message' => 'No active subscription.'], 404);
+            // Return default plan structure instead of 404
+            $defaultPlan = Plan::where('region', $region)
+                ->where('is_default', true)
+                ->with('aiEngine')
+                ->first();
+
+            if (!$defaultPlan) {
+                $response = response()->json(['message' => 'No default plan is configured.'], 500);
+                return $this->addCorsHeaders($response, $request);
+            }
+
+            $response = response()->json([
+                'plan'         => $defaultPlan->name ?? 'N/A',
+                'tokens_used'  => 0,
+                'tokens_limit' => $defaultPlan->max_tokens ?? 0,
+                'remaining'    => $defaultPlan->max_tokens ?? 0,
+            ]);
+            return $this->addCorsHeaders($response, $request);
         }
 
-        return response()->json([
+        $response = response()->json([
             'plan'         => $active->plan->name ?? 'N/A',
-            'tokens_used'  => $active->tokens_used,
+            'tokens_used'  => $active->tokens_used ?? 0,
             'tokens_limit' => $active->plan->max_tokens ?? 0,
-            'remaining'    => max(0, ($active->plan->max_tokens ?? 0) - $active->tokens_used),
+            'remaining'    => max(0, ($active->plan->max_tokens ?? 0) - ($active->tokens_used ?? 0)),
         ]);
+        return $this->addCorsHeaders($response, $request);
     }
 
     /**
@@ -371,5 +430,226 @@ class BillApiController extends Controller
             'tax_rate' => 0, // TODO: Calculate based on country
             'tax_id' => $user->metadata['tax_id'] ?? null,
         ]);
+    }
+
+    /**
+     * List all bills for the authenticated user
+     */
+    public function listBills(Request $request)
+    {
+        $user = $request->user();
+        $region = $this->getRegion($request);
+        $status = $request->query('status'); // optional filter: pending, paid, overdue
+
+        $query = Bill::where('user_id', $user->id)
+            ->with(['subscription.plan', 'payment'])
+            ->whereHas('subscription.plan', fn($q) => $q->where('region', $region));
+
+        if ($status) {
+            $query->where('status', $status);
+        }
+
+        $bills = $query->orderByDesc('created_at')->get();
+
+        $response = response()->json([
+            'bills' => $bills->map(function ($bill) {
+                return [
+                    'id' => $bill->id,
+                    'type' => $bill->type,
+                    'status' => $bill->status,
+                    'amount' => $bill->amount,
+                    'currency' => $bill->currency,
+                    'due_date' => $bill->due_date->toIso8601String(),
+                    'paid_at' => $bill->paid_at?->toIso8601String(),
+                    'description' => $bill->description,
+                    'plan_name' => $bill->subscription?->plan?->name,
+                    'is_overdue' => $bill->isOverdue(),
+                    'can_pay' => $bill->canBePaid(),
+                    'created_at' => $bill->created_at->toIso8601String(),
+                ];
+            }),
+        ]);
+
+        return $this->addCorsHeaders($response, $request);
+    }
+
+    /**
+     * Get pending bills (bills that need payment)
+     */
+    public function pendingBills(Request $request)
+    {
+        $user = $request->user();
+        $region = $this->getRegion($request);
+
+        $bills = Bill::where('user_id', $user->id)
+            ->where('status', 'pending')
+            ->with(['subscription.plan', 'payment'])
+            ->whereHas('subscription.plan', fn($q) => $q->where('region', $region))
+            ->orderBy('due_date', 'asc')
+            ->get();
+
+        // Mark overdue bills
+        foreach ($bills as $bill) {
+            if ($bill->isOverdue()) {
+                $bill->markAsOverdue();
+            }
+        }
+
+        $response = response()->json([
+            'pending_bills' => $bills->map(function ($bill) {
+                return [
+                    'id' => $bill->id,
+                    'type' => $bill->type,
+                    'status' => $bill->status,
+                    'amount' => $bill->amount,
+                    'currency' => $bill->currency,
+                    'due_date' => $bill->due_date->toIso8601String(),
+                    'description' => $bill->description,
+                    'plan_name' => $bill->subscription?->plan?->name,
+                    'is_overdue' => $bill->isOverdue(),
+                    'can_pay' => $bill->canBePaid(),
+                    'days_until_due' => now()->diffInDays($bill->due_date, false),
+                    'created_at' => $bill->created_at->toIso8601String(),
+                ];
+            }),
+        ]);
+
+        return $this->addCorsHeaders($response, $request);
+    }
+
+    /**
+     * Get single bill details
+     */
+    public function getBill(Request $request, $id)
+    {
+        $user = $request->user();
+        $region = $this->getRegion($request);
+
+        $bill = Bill::where('id', $id)
+            ->where('user_id', $user->id)
+            ->with(['subscription.plan', 'payment'])
+            ->whereHas('subscription.plan', fn($q) => $q->where('region', $region))
+            ->firstOrFail();
+
+        $response = response()->json([
+            'bill' => [
+                'id' => $bill->id,
+                'type' => $bill->type,
+                'status' => $bill->status,
+                'amount' => $bill->amount,
+                'currency' => $bill->currency,
+                'due_date' => $bill->due_date->toIso8601String(),
+                'paid_at' => $bill->paid_at?->toIso8601String(),
+                'description' => $bill->description,
+                'plan_name' => $bill->subscription?->plan?->name,
+                'subscription_id' => $bill->subscription_id,
+                'payment_id' => $bill->payment_id,
+                'is_overdue' => $bill->isOverdue(),
+                'can_pay' => $bill->canBePaid(),
+                'metadata' => $bill->metadata,
+                'created_at' => $bill->created_at->toIso8601String(),
+                'updated_at' => $bill->updated_at->toIso8601String(),
+            ],
+        ]);
+
+        return $this->addCorsHeaders($response, $request);
+    }
+
+    /**
+     * Pay a bill (create payment and return checkout URL)
+     */
+    public function payBill(Request $request, $id)
+    {
+        $user = $request->user();
+        $region = $this->getRegion($request);
+        $paymentMethod = $request->input('payment_method'); // optional override
+
+        $bill = Bill::where('id', $id)
+            ->where('user_id', $user->id)
+            ->with(['subscription.plan'])
+            ->whereHas('subscription.plan', fn($q) => $q->where('region', $region))
+            ->firstOrFail();
+
+        if (!$bill->canBePaid()) {
+            $response = response()->json([
+                'message' => $bill->isOverdue() 
+                    ? 'This bill is overdue. Please contact support.' 
+                    : 'This bill cannot be paid.',
+            ], 422);
+            return $this->addCorsHeaders($response, $request);
+        }
+
+        $subscription = $bill->subscription;
+        $plan = $subscription->plan;
+
+        // Determine payment method
+        $method = $paymentMethod 
+            ?? $bill->metadata['payment_method'] 
+            ?? $subscription->metadata['payment_method'] 
+            ?? ($region === 'intl' ? 'stripe' : 'chapa');
+
+        // Validate payment method
+        if (!in_array($method, ['stripe', 'chapa', 'telebirr'])) {
+            $response = response()->json([
+                'message' => 'Invalid payment method.',
+            ], 422);
+            return $this->addCorsHeaders($response, $request);
+        }
+
+        try {
+            $paymentManager = app(PaymentManager::class);
+
+            // Create payment
+            $payment = $paymentManager->initiatePayment($user, [
+                'amount' => $bill->amount,
+                'currency' => $bill->currency,
+                'provider' => $method,
+                'metadata' => [
+                    'plan_id' => $plan->id,
+                    'subscription_id' => $subscription->id,
+                    'bill_id' => $bill->id,
+                    'type' => 'bill_payment',
+                    'description' => $bill->description ?? "Payment for {$plan->name}",
+                ],
+                'description' => $bill->description ?? "Payment for {$plan->name}",
+            ]);
+
+            // Link payment to bill (will be marked as paid when webhook succeeds)
+            $bill->update([
+                'payment_id' => $payment->id,
+                'metadata' => array_merge($bill->metadata ?? [], [
+                    'payment_reference' => $payment->reference,
+                    'payment_method' => $method,
+                ]),
+            ]);
+
+            Log::info('Bill payment initiated', [
+                'bill_id' => $bill->id,
+                'payment_id' => $payment->id,
+                'payment_reference' => $payment->reference,
+                'method' => $method,
+            ]);
+
+            $response = response()->json([
+                'message' => 'Payment initiated successfully',
+                'payment_id' => $payment->id,
+                'payment_reference' => $payment->reference,
+                'checkout_url' => $payment->gateway_response ? json_decode($payment->gateway_response, true)['checkout_url'] ?? null : null,
+                'bill_id' => $bill->id,
+            ]);
+
+            return $this->addCorsHeaders($response, $request);
+        } catch (\Exception $e) {
+            Log::error('Failed to initiate bill payment', [
+                'bill_id' => $bill->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            $response = response()->json([
+                'message' => 'Failed to initiate payment: ' . $e->getMessage(),
+            ], 500);
+
+            return $this->addCorsHeaders($response, $request);
+        }
     }
 }

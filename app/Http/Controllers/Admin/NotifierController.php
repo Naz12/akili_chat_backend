@@ -4,15 +4,24 @@ namespace App\Http\Controllers\Admin;
 
 use App\Models\User;
 use App\Services\SmsService;
+use App\Services\Notification\NotificationService;
+use App\Notifications\AdminBroadcastNotification;
 use Illuminate\Http\Request;
 use App\Models\NotificationLog;
 use App\Mail\GenericMarketingMail;
 use App\Http\Controllers\Controller;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Log;
 
 class NotifierController extends Controller
 {
+    protected NotificationService $notificationService;
+
+    public function __construct(NotificationService $notificationService)
+    {
+        $this->notificationService = $notificationService;
+    }
     public function sendEmail(Request $request)
     {
         $request->validate([
@@ -72,49 +81,77 @@ class NotifierController extends Controller
             'message' => 'required|string',
         ]);
 
-        $channels = $request->channels;
+        $requestChannels = $request->channels;
         $users = $this->getUsersFromRequest($request->user_ids);
 
+        // Map request channel names to NotificationService channel constants
+        $notificationChannels = [];
+        foreach ($requestChannels as $channel) {
+            $notificationChannels[] = match($channel) {
+                'email' => NotificationService::CHANNEL_EMAIL,
+                'push' => NotificationService::CHANNEL_PUSH,
+                'sms' => NotificationService::CHANNEL_SMS,
+                'websocket' => NotificationService::CHANNEL_WEBSOCKET,
+                'webpush' => NotificationService::CHANNEL_WEBPUSH,
+                'database' => NotificationService::CHANNEL_DATABASE,
+                default => null,
+            };
+        }
+        $notificationChannels = array_filter($notificationChannels);
+
+        // If no valid channels, add database as default
+        if (empty($notificationChannels)) {
+            $notificationChannels = [NotificationService::CHANNEL_DATABASE];
+        }
+
+        $successCount = 0;
+        $errorCount = 0;
+
         foreach ($users as $user) {
-            $pref = $user->preference;
+            try {
+                $notification = new AdminBroadcastNotification(
+                    $request->subject,
+                    $request->message,
+                    $notificationChannels
+                );
 
-            if (!$pref) continue;
+                $results = $this->notificationService->send($user, $notification, $notificationChannels, true);
 
-            // 📧 Email
-            if (in_array('email', $channels) && $pref->allow_marketing_email) {
-                Mail::to($user->email)->send(new GenericMarketingMail($request->subject, $request->message));
+                // Check if at least one channel succeeded
+                $hasSuccess = false;
+                foreach ($results as $channel => $result) {
+                    if (isset($result['success']) && $result['success']) {
+                        $hasSuccess = true;
+                        break;
+                    }
+                }
 
-                NotificationLog::create([
+                if ($hasSuccess) {
+                    $successCount++;
+                } else {
+                    $errorCount++;
+                    Log::warning('Admin broadcast failed for user', [
+                        'user_id' => $user->id,
+                        'channels' => $notificationChannels,
+                        'results' => $results,
+                    ]);
+                }
+            } catch (\Exception $e) {
+                $errorCount++;
+                Log::error('Admin broadcast exception', [
                     'user_id' => $user->id,
-                    'channel' => 'email',
-                    'content' => $request->subject,
-                ]);
-            }
-
-            // 🔔 Push
-            if (in_array('push', $channels) && $pref->allow_push_notifications && $user->fcm_token) {
-                $this->sendFCM($user->fcm_token, $request->subject, $request->message);
-
-                NotificationLog::create([
-                    'user_id' => $user->id,
-                    'channel' => 'push',
-                    'content' => $request->subject,
-                ]);
-            }
-
-            // 📲 SMS
-            if (in_array('sms', $channels) && $pref->allow_sms && $user->phone) {
-                SmsService::send($user->phone, $request->message);
-
-                NotificationLog::create([
-                    'user_id' => $user->id,
-                    'channel' => 'sms',
-                    'content' => $request->message,
+                    'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString(),
                 ]);
             }
         }
 
-        return back()->with('success', '✅ Notifications sent successfully.');
+        $message = "✅ Notifications sent to {$successCount} user(s)";
+        if ($errorCount > 0) {
+            $message .= ", {$errorCount} failed";
+        }
+
+        return back()->with('success', $message);
     }
 
     protected function sendFCM($token, $title, $body)

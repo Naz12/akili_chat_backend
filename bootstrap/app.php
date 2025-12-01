@@ -37,16 +37,16 @@ return Application::configure(basePath: dirname(__DIR__))
         $addCorsHeaders = function($response, $request) {
             // Only add if not already present (middleware should have added them)
             if (!$response->headers->has('Access-Control-Allow-Origin')) {
-                $origin = $request->headers->get('Origin');
-                $allowedOrigins = config('cors.allowed_origins', []);
-                $allowedOrigin = ($origin && in_array($origin, $allowedOrigins)) ? $origin : ($allowedOrigins[0] ?? '*');
-                
-                if ($allowedOrigin !== '*') {
-                    $response->header('Access-Control-Allow-Origin', $allowedOrigin)
-                             ->header('Access-Control-Allow-Credentials', 'true');
-                } else {
-                    $response->header('Access-Control-Allow-Origin', '*');
-                }
+            $origin = $request->headers->get('Origin');
+            $allowedOrigins = config('cors.allowed_origins', []);
+            $allowedOrigin = ($origin && in_array($origin, $allowedOrigins)) ? $origin : ($allowedOrigins[0] ?? '*');
+            
+            if ($allowedOrigin !== '*') {
+                $response->header('Access-Control-Allow-Origin', $allowedOrigin)
+                         ->header('Access-Control-Allow-Credentials', 'true');
+            } else {
+                $response->header('Access-Control-Allow-Origin', '*');
+            }
                 $response->header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH')
                          ->header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin, X-Guest-UUID, X-CSRF-TOKEN, Referer, User-Agent, post');
             }

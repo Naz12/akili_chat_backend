@@ -9,6 +9,9 @@ use Stripe\Stripe;
 use Stripe\Checkout\Session;
 use Stripe\Webhook;
 use Stripe\Refund;
+use Stripe\Customer;
+use Stripe\Subscription;
+use Stripe\Price;
 use Stripe\Exception\SignatureVerificationException;
 
 class StripePaymentService implements PaymentServiceInterface
@@ -35,7 +38,17 @@ class StripePaymentService implements PaymentServiceInterface
             $metadata = $data['metadata'] ?? [];
             $successUrl = $data['success_url'] ?? config('app.frontend_url', config('app.url')) . '/payment/success';
             $cancelUrl = $data['cancel_url'] ?? config('app.frontend_url', config('app.url')) . '/payment/cancel';
+            
+            // Check if this is for a subscription (recurring payment)
+            $isSubscription = $data['is_subscription'] ?? false;
+            $customerId = $data['customer_id'] ?? null;
 
+            if ($isSubscription && $customerId) {
+                // Create subscription checkout session
+                return $this->createSubscriptionCheckout($data, $customerId, $successUrl, $cancelUrl, $metadata);
+            }
+
+            // One-time payment (existing behavior)
             $session = Session::create([
                 'payment_method_types' => ['card'],
                 'line_items' => [[
@@ -71,6 +84,117 @@ class StripePaymentService implements PaymentServiceInterface
                 'data' => $data,
             ]);
             throw new \Exception('Failed to create Stripe payment: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Create Stripe Subscription checkout session
+     */
+    protected function createSubscriptionCheckout(array $data, string $customerId, string $successUrl, string $cancelUrl, array $metadata): array
+    {
+        try {
+            $amount = $data['amount'] * 100; // Convert to cents
+            $currency = strtolower($data['currency'] ?? 'usd');
+            $billingCycle = $data['billing_cycle'] ?? 'monthly';
+            
+            // Determine interval based on billing cycle
+            $interval = match($billingCycle) {
+                'quarterly' => ['interval' => 'month', 'interval_count' => 3],
+                'annual' => ['interval' => 'year', 'interval_count' => 1],
+                default => ['interval' => 'month', 'interval_count' => 1], // monthly
+            };
+
+            // Create or retrieve price
+            $price = Price::create([
+                'currency' => $currency,
+                'unit_amount' => (int) $amount,
+                'recurring' => $interval,
+                'product_data' => [
+                    'name' => $data['description'] ?? 'Subscription',
+                ],
+            ]);
+
+            // Create checkout session for subscription
+            $session = Session::create([
+                'customer' => $customerId,
+                'payment_method_types' => ['card'],
+                'line_items' => [[
+                    'price' => $price->id,
+                    'quantity' => 1,
+                ]],
+                'mode' => 'subscription',
+                'success_url' => $successUrl . '?session_id={CHECKOUT_SESSION_ID}',
+                'cancel_url' => $cancelUrl,
+                'metadata' => $metadata,
+                'subscription_data' => [
+                    'metadata' => $metadata,
+                ],
+            ]);
+
+            Log::info('✅ Stripe subscription checkout session created', [
+                'session_id' => $session->id,
+                'customer_id' => $customerId,
+                'price_id' => $price->id,
+                'amount' => $amount / 100,
+                'currency' => $currency,
+            ]);
+
+            return [
+                'checkout_url' => $session->url,
+                'reference' => $session->id,
+                'transaction_id' => null,
+                'stripe_subscription_id' => null, // Will be set after payment
+                'price_id' => $price->id,
+            ];
+        } catch (\Exception $e) {
+            Log::error('❌ Stripe subscription checkout creation failed', [
+                'error' => $e->getMessage(),
+                'data' => $data,
+            ]);
+            throw new \Exception('Failed to create Stripe subscription checkout: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Create or retrieve Stripe Customer
+     */
+    public function getOrCreateCustomer(string $email, string $name, array $metadata = []): string
+    {
+        try {
+            // Search for existing customer by email
+            $customers = Customer::all([
+                'email' => $email,
+                'limit' => 1,
+            ]);
+
+            if (count($customers->data) > 0) {
+                $customer = $customers->data[0];
+                Log::info('✅ Found existing Stripe customer', [
+                    'customer_id' => $customer->id,
+                    'email' => $email,
+                ]);
+                return $customer->id;
+            }
+
+            // Create new customer
+            $customer = Customer::create([
+                'email' => $email,
+                'name' => $name,
+                'metadata' => $metadata,
+            ]);
+
+            Log::info('✅ Created new Stripe customer', [
+                'customer_id' => $customer->id,
+                'email' => $email,
+            ]);
+
+            return $customer->id;
+        } catch (\Exception $e) {
+            Log::error('❌ Failed to create/retrieve Stripe customer', [
+                'error' => $e->getMessage(),
+                'email' => $email,
+            ]);
+            throw new \Exception('Failed to create Stripe customer: ' . $e->getMessage());
         }
     }
 

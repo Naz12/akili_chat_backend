@@ -9,6 +9,7 @@ use App\Models\TokenUsage;
 use App\Models\ChatMessage;
 use App\Models\ChatSession;
 use App\Models\ChatSessionDoc;
+use App\Models\Subscription;
 use Illuminate\Support\Str;
 use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
@@ -94,21 +95,7 @@ class AIChatApiController extends Controller
                 Log::info('Guest user detected', ['guest_session_id' => $guestSession->id]);
             }
 
-            // ✅ Prevent execution if quota failed (for authenticated users only)
-            // Guest users will use default free plan with 24-hour expiration
-            if ($user) {
-                $quotaResult = $usageValidator->checkQuota($user);   // full check
-                if ($quotaResult['error']) {
-                    Log::warning('Quota check failed', $quotaResult);
-                    return response()->json([
-                        'message'  => [
-                            'role'    => 'assistant',
-                            'content' => $quotaResult['message'],
-                        ],
-                        'redirect' => '/plans',
-                    ], 200);   // 200 so chat UI treats it as a normal reply
-                }
-            }
+            // ✅ Quota checks will be done after plan is determined (below)
 
             $prompt = (string) $request->input('message', '');
             $file   = $request->input('attachment_url'); // may be null
@@ -145,11 +132,11 @@ class AIChatApiController extends Controller
                         } else {
                             // Session belongs to current user - use it
                             $session = $existingSession;
-                            if ($session->title === 'Untitled' && $title !== 'Untitled') {
-                                $session->update(['title' => $title]);
+                    if ($session->title === 'Untitled' && $title !== 'Untitled') {
+                        $session->update(['title' => $title]);
                             }
-                        }
-                    } else {
+                    }
+                } else {
                         // Session doesn't exist - create it
                         $session = ChatSession::create([
                             'id' => $sessionId,
@@ -261,11 +248,11 @@ class AIChatApiController extends Controller
                         } else {
                             // Session belongs to current user - use it
                             $session = $existingSession;
-                            if ($session->title === 'Untitled' && $title !== 'Untitled') {
-                                $session->update(['title' => $title]);
+                    if ($session->title === 'Untitled' && $title !== 'Untitled') {
+                        $session->update(['title' => $title]);
                             }
-                        }
-                    } else {
+                    }
+                } else {
                         // Session doesn't exist - create it
                         $session = ChatSession::create([
                             'id' => $sessionId,
@@ -459,12 +446,42 @@ class AIChatApiController extends Controller
                     ->where('region', $this->getRegion($request))
                     ->first();
                 $subscription = null; // Guests don't have subscriptions
+                
+                // ✅ Check guest quota limits (daily messages, token quota)
+                if ($plan && $guestSession) {
+                    $quotaResult = $usageValidator->checkQuota(null, false, $guestSession, $plan);
+                    if ($quotaResult['error']) {
+                        Log::warning('Guest quota check failed', $quotaResult);
+                        return response()->json([
+                            'message'  => [
+                                'role'    => 'assistant',
+                                'content' => $quotaResult['message'],
+                            ],
+                            'redirect' => '/register',
+                        ], 200);   // 200 so chat UI treats it as a normal reply
+                    }
+                }
             } else {
                 $subscription = $user->active_subscription;
                 $plan = $subscription?->plan ?? Plan::where('is_default', true)
                     ->where('is_active', true)
                     ->where('region', $this->getRegion($request))
                     ->first();
+                
+                // ✅ Check authenticated user quota limits
+                if ($user) {
+                    $quotaResult = $usageValidator->checkQuota($user);   // full check
+                    if ($quotaResult['error']) {
+                        Log::warning('Quota check failed', $quotaResult);
+                        return response()->json([
+                            'message'  => [
+                                'role'    => 'assistant',
+                                'content' => $quotaResult['message'],
+                            ],
+                            'redirect' => '/plans',
+                        ], 200);   // 200 so chat UI treats it as a normal reply
+                    }
+                }
             }
             
             if (!$plan) {
@@ -576,7 +593,7 @@ class AIChatApiController extends Controller
                         } else {
                             // Session belongs to current user - use it
                             $session = $existingSession;
-                            if ($session->title === 'Untitled' && $title !== 'Untitled') {
+                if ($session->title === 'Untitled' && $title !== 'Untitled') {
                                 $session->update(['title' => $title]);
                             }
                         }
@@ -752,6 +769,34 @@ class AIChatApiController extends Controller
 
             $data  = $res->json();
             
+            // Extract usage data - check multiple possible locations
+            $usageData = null;
+            if (isset($data['usage'])) {
+                // OpenAI format: usage at root level
+                $usageData = $data['usage'];
+                Log::debug('Usage data found at root level', ['usage' => $usageData]);
+            } elseif (isset($data['data']['usage'])) {
+                // AI Manager format: usage nested in data
+                $usageData = $data['data']['usage'];
+                Log::debug('Usage data found in data.usage', ['usage' => $usageData]);
+            } elseif (isset($data['usage_data'])) {
+                // Alternative location
+                $usageData = $data['usage_data'];
+                Log::debug('Usage data found in usage_data', ['usage' => $usageData]);
+            } elseif (isset($data['tokens'])) {
+                // Direct tokens field
+                $usageData = ['total_tokens' => $data['tokens']];
+                Log::debug('Usage data found in tokens field', ['usage' => $usageData]);
+            } else {
+                // Check for other possible locations and log full structure for debugging
+                Log::warning('Usage data not found in expected locations', [
+                    'data_keys' => array_keys($data),
+                    'has_data_key' => isset($data['data']),
+                    'data_data_keys' => isset($data['data']) && is_array($data['data']) ? array_keys($data['data']) : null,
+                    'full_response_sample' => json_encode(array_slice($data, 0, 10, true)), // First 10 keys for debugging
+                ]);
+            }
+            
             // Parse response based on provider
             if ($isAIManager && isset($data['data']['content'])) {
                 // AI Manager response format
@@ -792,45 +837,149 @@ class AIChatApiController extends Controller
                 'content'         => $reply,
             ]));
 
-            // 📊 token usage (optional)
-            // Only track for authenticated users with subscriptions
-            if (isset($data['usage']) && !$isGuest && $subscription) {
-                $tokensUsed = $data['usage']['total_tokens'] ?? 0;
+            // 📊 token usage tracking
+            // Try multiple ways to extract token count
+            $tokensUsed = 0;
+            if ($usageData) {
+                $tokensUsed = $usageData['total_tokens'] 
+                    ?? $usageData['tokens'] 
+                    ?? (($usageData['prompt_tokens'] ?? 0) + ($usageData['completion_tokens'] ?? 0))
+                    ?? 0;
+            }
+            
+            // If no usage data provided or tokens are 0, estimate tokens based on message length
+            // Rough estimation: ~4 characters per token for English text
+            if ($tokensUsed === 0) {
+                $promptLength = strlen($prompt ?? '');
+                $replyLength = strlen($reply ?? '');
+                $estimatedTokens = (int)ceil(($promptLength + $replyLength) / 4);
+                
+                if ($estimatedTokens > 0) {
+                    $tokensUsed = $estimatedTokens;
+                    Log::info('No usage data from AI service, estimating tokens', [
+                        'estimated_tokens' => $estimatedTokens,
+                        'prompt_length' => $promptLength,
+                        'reply_length' => $replyLength,
+                        'usage_data_provided' => !is_null($usageData),
+                        'user_id' => $user?->id,
+                        'is_guest' => $isGuest,
+                        'has_subscription' => !is_null($subscription),
+                    ]);
+                } else {
+                    Log::warning('Token estimation resulted in 0 tokens', [
+                        'prompt_length' => $promptLength,
+                        'reply_length' => $replyLength,
+                        'prompt_preview' => substr($prompt ?? '', 0, 50),
+                        'reply_preview' => substr($reply ?? '', 0, 50),
+                    ]);
+                }
+            }
+            
+            if ($tokensUsed > 0) {
+                Log::info('Token usage detected', [
+                    'tokens' => $tokensUsed,
+                    'is_guest' => $isGuest,
+                    'has_subscription' => !is_null($subscription),
+                    'user_id' => $user?->id,
+                    'subscription_id' => $subscription?->id,
+                    'usage_data_provided' => !is_null($usageData),
+                ]);
+            } else {
+                Log::warning('No tokens detected in usage data', [
+                    'is_guest' => $isGuest,
+                    'has_subscription' => !is_null($subscription),
+                    'usage_data' => $usageData,
+                    'prompt_length' => strlen($prompt ?? ''),
+                    'reply_length' => strlen($reply ?? ''),
+                ]);
+            }
+            
+            // Track for authenticated users with subscriptions
+            if ($tokensUsed > 0 && !$isGuest && $subscription) {
                 $cost = ($engine->price_per_1k ?? 0) * $tokensUsed / 1000;
                 
-                // Use transaction with lock to prevent race conditions
-                DB::transaction(function () use ($user, $session, $engine, $subscription, $tokensUsed, $cost, $prompt, $reply) {
-                    // Lock the subscription row for update
-                    $lockedSubscription = Subscription::where('id', $subscription->id)
-                        ->lockForUpdate()
-                        ->first();
-                    
-                    if ($lockedSubscription) {
-                        // Create token usage record
-                        TokenUsage::create([
-                            'user_id'         => $user->id,
-                            'chat_session_id' => $session->id,
-                            'engine_id'       => $engine->id,
-                            'subscription_id' => $lockedSubscription->id,
-                            'tokens_used'     => $tokensUsed,
-                            'cost'            => $cost,
-                            'prompt'          => substr($prompt ?? '', 0, 65535), // Truncate if too long
-                            'response'        => substr($reply ?? '', 0, 4294967295), // Truncate if too long
-                            'source'          => 'chat',
-                        ]);
+                try {
+                    // Use transaction with lock to prevent race conditions
+                    DB::transaction(function () use ($user, $session, $engine, $subscription, $tokensUsed, $cost, $prompt, $reply) {
+                        // Lock the subscription row for update
+                        $lockedSubscription = Subscription::where('id', $subscription->id)
+                            ->lockForUpdate()
+                            ->first();
                         
-                        // Atomically increment subscription tokens_used
-                        $lockedSubscription->increment('tokens_used', $tokensUsed);
-                    }
-                });
-            } elseif (isset($data['usage']) && $isGuest) {
-                // For guests, track usage in guest_session metadata (optional, for analytics)
-                $tokensUsed = $data['usage']['total_tokens'] ?? 0;
+                        if ($lockedSubscription) {
+                            // Create token usage record
+                            TokenUsage::create([
+                                'user_id'         => $user->id,
+                                'chat_session_id' => $session->id,
+                                'engine_id'       => $engine->id,
+                                'subscription_id' => $lockedSubscription->id,
+                                'tokens_used'     => $tokensUsed,
+                                'cost'            => $cost,
+                                'prompt'          => substr($prompt ?? '', 0, 65535), // Truncate if too long
+                                'response'        => substr($reply ?? '', 0, 4294967295), // Truncate if too long
+                                'source'          => 'chat',
+                            ]);
+                            
+                            // Atomically increment subscription tokens_used
+                            $lockedSubscription->increment('tokens_used', $tokensUsed);
+                            
+                            Log::info('Token usage tracked for authenticated user', [
+                                'user_id' => $user->id,
+                                'subscription_id' => $lockedSubscription->id,
+                                'tokens_used' => $tokensUsed,
+                                'new_total' => $lockedSubscription->tokens_used,
+                            ]);
+                        } else {
+                            Log::error('Failed to lock subscription for token usage update', [
+                                'subscription_id' => $subscription->id,
+                                'user_id' => $user->id,
+                            ]);
+                        }
+                    });
+                } catch (\Exception $e) {
+                    Log::error('Failed to track token usage', [
+                        'user_id' => $user->id,
+                        'subscription_id' => $subscription->id,
+                        'tokens_used' => $tokensUsed,
+                        'error' => $e->getMessage(),
+                        'trace' => $e->getTraceAsString(),
+                    ]);
+                }
+            } elseif ($tokensUsed > 0 && $isGuest) {
+                // For guests, track usage in TokenUsage table (without subscription_id) AND metadata
+                $cost = ($engine->price_per_1k ?? 0) * $tokensUsed / 1000;
+                
+                // Create token usage record for guest (no subscription_id)
+                TokenUsage::create([
+                    'user_id'         => null, // Guests don't have user_id
+                    'chat_session_id' => $session->id,
+                    'engine_id'       => $engine->id,
+                    'subscription_id' => null, // Guests don't have subscriptions
+                    'tokens_used'     => $tokensUsed,
+                    'cost'            => $cost,
+                    'prompt'          => substr($prompt ?? '', 0, 65535),
+                    'response'        => substr($reply ?? '', 0, 4294967295),
+                    'source'          => 'chat',
+                ]);
+                
+                // Also update guest session metadata for quick access
                 $guestSession->metadata = array_merge($guestSession->metadata ?? [], [
                     'total_tokens_used' => ($guestSession->metadata['total_tokens_used'] ?? 0) + $tokensUsed,
                     'last_usage' => now()->toIso8601String(),
                 ]);
                 $guestSession->save();
+                
+                Log::info('Token usage tracked for guest', [
+                    'guest_session_id' => $guestSession->id,
+                    'tokens_used' => $tokensUsed,
+                    'total_tokens_used' => $guestSession->metadata['total_tokens_used'],
+                ]);
+            } elseif ($tokensUsed === 0 && ($usageData || !$isGuest)) {
+                Log::warning('No tokens detected in usage data', [
+                    'is_guest' => $isGuest,
+                    'has_subscription' => !is_null($subscription),
+                    'usage_data' => $usageData,
+                ]);
             }
 
             return response()->json([

@@ -16,6 +16,9 @@ use App\Http\Controllers\Api\AiChatHistoryApiController;
 use App\Http\Controllers\Api\ChatSessionShareController;
 use App\Http\Controllers\Api\PaymentApiController;
 use App\Http\Controllers\Api\PaymentWebhookController;
+use App\Http\Controllers\Api\VisitorApiController;
+use App\Http\Controllers\Api\WebPushApiController;
+use App\Http\Controllers\Api\WebSocketApiController;
 
 
 Route::prefix('v1')->group(function () {
@@ -25,6 +28,10 @@ Route::prefix('v1')->group(function () {
     Route::post('/login/google', [AuthApiController::class, 'loginWithGoogle']);
     Route::post('/send-reset-code', [AuthApiController::class, 'sendResetCode'])->middleware('throttle:3,1');
     Route::post('/reset-password-code', [AuthApiController::class, 'resetPasswordWithCode']);
+    
+    // 📊 Visitor Tracking (Public - no auth required)
+    Route::post('/visitors/track', [VisitorApiController::class, 'track'])->middleware('throttle:100,1');
+    Route::post('/visitors/activity', [VisitorApiController::class, 'updateActivity'])->middleware('throttle:60,1');
     
     
 
@@ -52,6 +59,16 @@ Route::prefix('v1')->group(function () {
                 Route::get('/user', [UserApiController::class, 'profile']);
                 Route::post('/logout', [UserApiController::class, 'logout']);
                 Route::post('/fcm-token', [UserApiController::class, 'storeFcmToken']);
+                
+                // 🔔 Web Push API
+                Route::get('/webpush/vapid-key', [WebPushApiController::class, 'vapidPublicKey']);
+                Route::post('/webpush/subscribe', [WebPushApiController::class, 'subscribe']);
+                Route::post('/webpush/unsubscribe', [WebPushApiController::class, 'unsubscribe']);
+                Route::get('/webpush/subscriptions', [WebPushApiController::class, 'subscriptions']);
+                
+                // 🔌 WebSocket API
+                Route::get('/websocket/config', [WebSocketApiController::class, 'config']);
+                Route::post('/websocket/authenticate', [WebSocketApiController::class, 'authenticate']);
 
                 Route::middleware(['ensure.region.match'])->group(function () use ($prefix) {
                     // 🗂️ Plans & Subscriptions
@@ -100,6 +117,12 @@ Route::prefix('v1')->group(function () {
                     Route::get('/billing/address', [BillApiController::class, 'billingAddress']);
                     Route::put('/billing/address', [BillApiController::class, 'billingAddress']);
                     Route::get('/billing/tax-information', [BillApiController::class, 'taxInformation']);
+
+                    // 💰 Bill Management (Pending Bills, Pay Bills)
+                    Route::get('/bills', [BillApiController::class, 'listBills']);
+                    Route::get('/bills/pending', [BillApiController::class, 'pendingBills']);
+                    Route::get('/bills/{id}', [BillApiController::class, 'getBill']);
+                    Route::post('/bills/{id}/pay', [BillApiController::class, 'payBill']);
 
                     // 💰 Region-based Subscription
                     Route::post('/regional-subscribe', [PaymentMethodApiController::class, 'subscribe']);

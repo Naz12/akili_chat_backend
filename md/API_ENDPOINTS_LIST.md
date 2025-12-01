@@ -108,6 +108,18 @@ These endpoints work for both authenticated users and guest users. Guest users a
 - 🔐 `POST /api/v1/{region}/notifications/{notificationId}/read` - Mark notification as read
 - 🔐 `POST /api/v1/{region}/notifications/read` - Mark all notifications as read
 
+## 🔌 WebSocket Real-Time (Authenticated Only) - NEW
+
+- 🔐 `GET /api/v1/{region}/websocket/config` - Get WebSocket configuration
+- 🔐 `POST /api/v1/{region}/websocket/authenticate` - Authenticate WebSocket connection
+
+## 🌐 Web Push API (Authenticated Only) - NEW
+
+- 🔐 `GET /api/v1/{region}/webpush/vapid-key` - Get VAPID public key (required for subscription)
+- 🔐 `POST /api/v1/{region}/webpush/subscribe` - Subscribe to browser push notifications
+- 🔐 `POST /api/v1/{region}/webpush/unsubscribe` - Unsubscribe from browser push notifications
+- 🔐 `GET /api/v1/{region}/webpush/subscriptions` - Get user's Web Push subscriptions
+
 ---
 
 ## 📄 Billing (Authenticated Only)

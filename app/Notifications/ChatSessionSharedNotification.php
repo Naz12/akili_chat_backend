@@ -35,6 +35,8 @@ class ChatSessionSharedNotification extends Notification implements ShouldQueue
         return [
             \App\Services\Notification\NotificationService::CHANNEL_DATABASE,
             \App\Services\Notification\NotificationService::CHANNEL_EMAIL,
+            \App\Services\Notification\NotificationService::CHANNEL_WEBSOCKET,
+            \App\Services\Notification\NotificationService::CHANNEL_WEBPUSH,
         ];
     }
 

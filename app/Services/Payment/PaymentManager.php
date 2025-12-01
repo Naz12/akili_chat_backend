@@ -110,14 +110,34 @@ class PaymentManager
     {
         $payment = Payment::where('reference', $reference)->firstOrFail();
 
+        Log::info('🔍 Verifying payment with gateway', [
+            'payment_id' => $payment->id,
+            'reference' => $reference,
+            'provider' => $payment->provider,
+            'current_status' => $payment->status,
+        ]);
+
         $paymentService = PaymentServiceFactory::make($payment->provider);
         $verificationResult = $paymentService->verifyPayment($reference);
 
         $oldStatus = $payment->status;
-        $payment->status = $verificationResult['status'];
+        $newStatus = $verificationResult['status'] ?? 'pending';
+        
+        // Always update payment status from verification result
+        $payment->status = $newStatus;
         $payment->transaction_id = $verificationResult['transaction_id'] ?? $payment->transaction_id;
         $payment->gateway_response = json_encode($verificationResult);
+        $payment->updated_at = now(); // Ensure updated_at is refreshed
         $payment->save();
+
+        Log::info('✅ Payment verified and database updated', [
+            'payment_id' => $payment->id,
+            'reference' => $reference,
+            'old_status' => $oldStatus,
+            'new_status' => $payment->status,
+            'transaction_id' => $payment->transaction_id,
+            'status_changed' => $oldStatus !== $payment->status,
+        ]);
 
         // Fire events if status changed
         if ($oldStatus !== $payment->status) {
@@ -126,14 +146,12 @@ class PaymentManager
                 'failed' => event(new PaymentFailed($payment)),
                 default => null,
             };
+            
+            Log::info('📢 Payment status change event fired', [
+                'payment_id' => $payment->id,
+                'new_status' => $payment->status,
+            ]);
         }
-
-        Log::info('✅ Payment verified', [
-            'payment_id' => $payment->id,
-            'reference' => $reference,
-            'old_status' => $oldStatus,
-            'new_status' => $payment->status,
-        ]);
 
         return $payment;
     }
@@ -182,13 +200,16 @@ class PaymentManager
      * @return Payment
      * @throws \Exception
      */
-    public function processWebhook(string $provider, array|string $payload, string $signature): Payment
+    public function processWebhook(string $provider, array|string $payload, string $signature, ?string $rawPayload = null): Payment
     {
         $paymentService = PaymentServiceFactory::make($provider);
         
-        // Stripe needs raw payload string for signature verification
+        // Stripe and Chapa need raw payload string for signature verification
         if ($provider === 'stripe' && is_string($payload)) {
             $webhookData = $paymentService->handleWebhookRaw($payload, $signature);
+        } elseif ($provider === 'chapa' && $rawPayload) {
+            // Chapa signature verification requires raw request body
+            $webhookData = $paymentService->handleWebhookRaw($rawPayload, $signature);
         } else {
             $webhookData = $paymentService->handleWebhook(is_array($payload) ? $payload : [], $signature);
         }
@@ -233,20 +254,50 @@ class PaymentManager
         }
 
         // Find payment by reference or transaction_id
-        // Priority: session_id (for checkout.session.completed) > payment_intent/transaction_id > tx_ref
-        $reference = $webhookData['data']['session_id'] 
-            ?? $webhookData['data']['payment_intent']
-            ?? $webhookData['data']['transaction_id'] 
-            ?? $webhookData['data']['tx_ref']
-            ?? null;
+        // For Chapa: tx_ref is the payment reference, reference is the transaction_id
+        // For Stripe: session_id or payment_intent
+        $reference = null;
+        $transactionId = null;
+        
+        if ($provider === 'chapa') {
+            // Chapa sends tx_ref (payment reference) and reference (transaction ID)
+            $reference = $webhookData['data']['tx_ref'] ?? null;
+            $transactionId = $webhookData['data']['reference'] ?? $webhookData['data']['transaction_id'] ?? null;
+        } else {
+            // Stripe and others
+            $reference = $webhookData['data']['session_id'] 
+                ?? $webhookData['data']['payment_intent']
+                ?? $webhookData['data']['transaction_id'] 
+                ?? $webhookData['data']['tx_ref']
+                ?? null;
+        }
 
         if (!$reference) {
             throw new \Exception('No payment reference found in webhook data');
         }
 
-        $payment = Payment::where('reference', $reference)
-            ->orWhere('transaction_id', $reference)
-            ->first();
+        // Extract Stripe subscription ID from checkout.session.completed events
+        $stripeSubscriptionId = null;
+        if ($provider === 'stripe' && $webhookData['event'] === 'checkout.session.completed') {
+            $stripeSubscriptionId = $webhookData['data']['subscription'] 
+                ?? $webhookData['data']['subscription_id'] 
+                ?? null;
+            
+            if ($stripeSubscriptionId) {
+                Log::info('✅ Stripe subscription ID extracted from checkout session', [
+                    'subscription_id' => $stripeSubscriptionId,
+                    'session_id' => $reference,
+                ]);
+            }
+        }
+
+        // Find payment by reference (tx_ref for Chapa, session_id for Stripe)
+        $payment = Payment::where('reference', $reference)->first();
+        
+        // If not found and we have transaction_id, try that
+        if (!$payment && $transactionId) {
+            $payment = Payment::where('transaction_id', $transactionId)->first();
+        }
 
         // For payment_intent.succeeded events, try to find payment by payment_intent ID
         // Payment records created via checkout session have session_id as reference,
@@ -364,28 +415,114 @@ class PaymentManager
         $oldStatus = $payment->status;
 
         // Update payment status based on event
-        $event = $webhookData['event'];
+        $event = $webhookData['event'] ?? 'unknown';
         
         // Chapa events: 'charge.success', 'charge.failure', etc.
-        // Also check status in data for Chapa
+        // Also check status in data for Chapa (Chapa sends status at various levels)
         $dataStatus = $webhookData['data']['status'] ?? null;
         
-        if (in_array($event, ['charge.success', 'checkout.session.completed', 'payment_intent.succeeded']) 
-            || $dataStatus === 'successful' 
-            || $dataStatus === 'success') {
+        // Normalize status values for comparison (handle case-insensitive and variations)
+        $normalizedDataStatus = $dataStatus ? strtolower(trim($dataStatus)) : null;
+        
+        // Check for success conditions - be more flexible with Chapa status values
+        $isSuccess = in_array($event, ['charge.success', 'checkout.session.completed', 'payment_intent.succeeded'])
+            || in_array($normalizedDataStatus, ['success', 'successful', 'completed', 'paid', 'settled'])
+            || (str_contains(strtolower($event), 'success') && !str_contains(strtolower($event), 'fail'));
+        
+        // Check for failure conditions
+        $isFailure = in_array($event, ['charge.failure', 'payment_intent.payment_failed'])
+            || in_array($normalizedDataStatus, ['failed', 'failure', 'declined', 'cancelled', 'canceled']);
+        
+        // Check for refund conditions
+        $isRefunded = $event === 'charge.refunded' 
+            || str_contains(strtolower($event), 'refund')
+            || in_array($normalizedDataStatus, ['refunded', 'refund']);
+        
+        Log::info('🔍 Determining payment status from webhook', [
+            'payment_id' => $payment->id,
+            'provider' => $provider,
+            'event' => $event,
+            'data_status' => $dataStatus,
+            'normalized_status' => $normalizedDataStatus,
+            'is_success' => $isSuccess,
+            'is_failure' => $isFailure,
+            'is_refunded' => $isRefunded,
+            'current_status' => $oldStatus,
+        ]);
+        
+        // Extract transaction_id from webhook data (available for all statuses)
+        $newTransactionId = $webhookData['data']['transaction_id'] 
+            ?? $webhookData['data']['reference']  // Chapa uses 'reference' as transaction_id
+            ?? $webhookData['data']['id']
+            ?? $webhookData['data']['payment_intent'] 
+            ?? null;
+        
+        if ($isSuccess) {
             $payment->status = 'success';
-            $payment->transaction_id = $webhookData['data']['transaction_id'] 
-                ?? $webhookData['data']['id']
-                ?? $webhookData['data']['payment_intent'] 
-                ?? $payment->transaction_id;
-        } elseif (in_array($event, ['charge.failure', 'payment_intent.payment_failed']) 
-            || $dataStatus === 'failed') {
+            
+            // Update transaction_id if available (even if already set, in case we get a better one)
+            if ($newTransactionId) {
+                $payment->transaction_id = $newTransactionId;
+            }
+            
+            Log::info('✅ Payment status updated to success', [
+                'payment_id' => $payment->id,
+                'transaction_id' => $payment->transaction_id,
+                'status_changed' => $oldStatus !== 'success',
+            ]);
+        } elseif ($isFailure) {
             $payment->status = 'failed';
-        } elseif ($event === 'charge.refunded' || str_contains($event, 'refund') || $dataStatus === 'refunded') {
+            
+            // Update transaction_id if available
+            if ($newTransactionId) {
+                $payment->transaction_id = $newTransactionId;
+            }
+            
+            Log::info('❌ Payment status updated to failed', [
+                'payment_id' => $payment->id,
+                'status_changed' => $oldStatus !== 'failed',
+            ]);
+        } elseif ($isRefunded) {
             $payment->status = 'refunded';
+            
+            // Update transaction_id if available
+            if ($newTransactionId) {
+                $payment->transaction_id = $newTransactionId;
+            }
+            
+            Log::info('↩️ Payment status updated to refunded', [
+                'payment_id' => $payment->id,
+                'status_changed' => $oldStatus !== 'refunded',
+            ]);
+        } else {
+            // Even if status doesn't match, update transaction_id if available
+            if ($newTransactionId && !$payment->transaction_id) {
+                $payment->transaction_id = $newTransactionId;
+                Log::info('📝 Updated transaction_id from webhook', [
+                    'payment_id' => $payment->id,
+                    'transaction_id' => $newTransactionId,
+                ]);
+            }
+            
+            Log::warning('⚠️ Payment status not updated - no matching condition', [
+                'payment_id' => $payment->id,
+                'event' => $event,
+                'data_status' => $dataStatus,
+                'current_status' => $oldStatus,
+            ]);
+        }
+
+        // Store Stripe subscription ID in payment metadata if available
+        if ($stripeSubscriptionId) {
+            $paymentMetadata = is_string($payment->metadata) 
+                ? json_decode($payment->metadata, true) 
+                : ($payment->metadata ?? []);
+            $paymentMetadata['stripe_subscription_id'] = $stripeSubscriptionId;
+            $payment->metadata = $paymentMetadata;
         }
 
         $payment->gateway_response = json_encode($webhookData);
+        $payment->updated_at = now(); // Ensure updated_at is refreshed
         $payment->save();
 
         // Fire events if status changed

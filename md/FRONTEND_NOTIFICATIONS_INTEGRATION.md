@@ -1,0 +1,957 @@
+# Frontend Notifications Integration Guide
+
+## Overview
+
+This guide explains how to integrate **real-time WebSocket notifications** and **Web Push API** into your frontend application. The backend now supports multiple notification channels that work together to deliver notifications instantly.
+
+---
+
+## Table of Contents
+
+1. [What's New](#whats-new)
+2. [WebSocket Real-Time Notifications](#websocket-real-time-notifications)
+3. [Web Push API (Browser Notifications)](#web-push-api-browser-notifications)
+4. [API Endpoints Reference](#api-endpoints-reference)
+5. [Frontend Integration Examples](#frontend-integration-examples)
+6. [Notification Data Structure](#notification-data-structure)
+7. [Best Practices](#best-practices)
+
+---
+
+## What's New
+
+### New Features
+
+1. **WebSocket Real-Time Notifications** 🔌
+   - Instant notifications when user is online
+   - No polling needed
+   - Real-time badge updates
+   - Works when browser tab is open
+
+2. **Web Push API** 🌐
+   - Browser push notifications
+   - Works when browser tab is closed
+   - Requires user permission
+   - Cross-platform support
+
+3. **Enhanced Notification System**
+   - All notifications still stored in database
+   - Multiple delivery channels (Database, Email, WebSocket, Web Push, FCM Push, SMS)
+   - User preferences respected
+   - Unified notification API
+
+---
+
+## WebSocket Real-Time Notifications
+
+### How It Works
+
+- **Connection**: Frontend connects to WebSocket server
+- **Channel**: Each user has a private channel: `private-user.{userId}`
+- **Events**: Notifications arrive as real-time events
+- **Fallback**: If WebSocket fails, notifications still stored in database
+
+### WebSocket Configuration
+
+**Endpoint:** `wss://chat.akmicroservice.com/app/`
+
+**App Credentials (Hardcoded - Use These Values):**
+- **App ID**: `akili-chat`
+- **App Key**: `akili-chat-key` ⚠️ **Required for frontend connection**
+- **App Secret**: `akili-chat-secret` (backend only, not needed by frontend)
+
+**Note:** These credentials are configured on the backend and should be used directly in your frontend code. You can also retrieve the WebSocket URL dynamically using the `/websocket/config` endpoint.
+
+### API Endpoints
+
+#### Get WebSocket Configuration
+
+Get WebSocket connection details for the authenticated user.
+
+**Endpoint:** `GET /api/v1/{region}/websocket/config`
+
+**Headers:**
+```
+Authorization: Bearer {token}
+```
+
+**Response:**
+```json
+{
+  "websocket_url": "wss://chat.akmicroservice.com/app/",
+  "app_key": "akili-chat-key",
+  "user_channel": "private-user.123"
+}
+```
+
+#### Get VAPID Public Key (Web Push)
+
+Get the VAPID public key required for Web Push subscription.
+
+**Endpoint:** `GET /api/v1/{region}/webpush/vapid-key`
+
+**Headers:**
+```
+Authorization: Bearer {token}
+```
+
+**Response:**
+```json
+{
+  "vapid_public_key": "BKxVx..."
+}
+```
+
+**Error Response (if VAPID not configured):**
+```json
+{
+  "error": "VAPID public key not configured",
+  "message": "Web Push is not available. Please contact support."
+}
+```
+
+**Note:** 
+- ⚠️ **This key MUST be retrieved from the backend** - it cannot be hardcoded
+- The key is unique to your backend instance and is configured via `VAPID_PUBLIC_KEY` environment variable
+- Store it and use it when calling `pushManager.subscribe()`
+- If you get a 503 error, Web Push is not configured on the backend
+
+#### Subscribe to Web Push
+
+**Endpoint:** `POST /api/v1/{region}/webpush/subscribe`
+
+**Headers:**
+```
+Authorization: Bearer {token}
+Content-Type: application/json
+```
+
+**Body:**
+```json
+{
+  "endpoint": "https://fcm.googleapis.com/fcm/send/...",
+  "keys": {
+    "p256dh": "base64-encoded-p256dh-key",
+    "auth": "base64-encoded-auth-key"
+  }
+}
+```
+
+**Response:**
+```json
+{
+  "websocket_url": "wss://chat.akmicroservice.com/app/",
+  "user_id": 1,
+  "channel": "private-user.1"
+}
+```
+
+#### Authenticate WebSocket Connection
+
+Authenticate WebSocket connection (called automatically by WebSocket client).
+
+**Endpoint:** `POST /api/v1/{region}/websocket/authenticate`
+
+**Headers:**
+```
+Authorization: Bearer {token}
+Content-Type: application/json
+```
+
+**Body:**
+```json
+{
+  "channel_name": "private-user.1",
+  "socket_id": "123.456"
+}
+```
+
+**Response:**
+```json
+{
+  "auth": "akili-chat-key:signature"
+}
+```
+
+---
+
+## Web Push API (Browser Notifications)
+
+### How It Works
+
+- **Permission**: Request browser notification permission
+- **Subscription**: Get push subscription from browser
+- **Register**: Send subscription to backend
+- **Receive**: Browser shows notifications even when tab is closed
+
+### API Endpoints
+
+#### Subscribe to Web Push
+
+Register a browser push subscription.
+
+**Endpoint:** `POST /api/v1/{region}/webpush/subscribe`
+
+**Headers:**
+```
+Authorization: Bearer {token}
+Content-Type: application/json
+```
+
+**Body:**
+```json
+{
+  "endpoint": "https://fcm.googleapis.com/fcm/send/...",
+  "keys": {
+    "p256dh": "base64-encoded-p256dh-key",
+    "auth": "base64-encoded-auth-key"
+  }
+}
+```
+
+**Response:**
+```json
+{
+  "status": "subscribed",
+  "subscription_id": 1
+}
+```
+
+#### Unsubscribe from Web Push
+
+Remove a browser push subscription.
+
+**Endpoint:** `POST /api/v1/{region}/webpush/unsubscribe`
+
+**Headers:**
+```
+Authorization: Bearer {token}
+Content-Type: application/json
+```
+
+**Body:**
+```json
+{
+  "endpoint": "https://fcm.googleapis.com/fcm/send/..."
+}
+```
+
+**Response:**
+```json
+{
+  "status": "unsubscribed"
+}
+```
+
+#### Get User's Web Push Subscriptions
+
+Get all active Web Push subscriptions for the user.
+
+**Endpoint:** `GET /api/v1/{region}/webpush/subscriptions`
+
+**Headers:**
+```
+Authorization: Bearer {token}
+```
+
+**Response:**
+```json
+{
+  "subscriptions": [
+    {
+      "id": 1,
+      "endpoint": "https://fcm.googleapis.com/fcm/send/...",
+      "created_at": "2025-12-01T09:00:00.000000Z"
+    }
+  ],
+  "count": 1
+}
+```
+
+---
+
+## Existing Notification Endpoints (Updated)
+
+### Get Notifications
+
+**Endpoint:** `GET /api/v1/{region}/notifications`
+
+**Headers:**
+```
+Authorization: Bearer {token}
+```
+
+**Response:** (Same as before)
+```json
+[
+  {
+    "id": "uuid-here",
+    "type": "App\\Notifications\\ChatSessionSharedNotification",
+    "data": {
+      "title": "Chat Session Shared",
+      "message": "John shared \"My Chat\" with you",
+      "type": "chat_session_shared",
+      "share_id": 1,
+      "action_url": "/chat/shares/1"
+    },
+    "read_at": null,
+    "created_at": "2025-12-01T09:00:00.000000Z"
+  }
+]
+```
+
+### Mark Notification as Read
+
+**Endpoint:** `POST /api/v1/{region}/notifications/{notificationId}/read`
+
+### Mark All Notifications as Read
+
+**Endpoint:** `POST /api/v1/{region}/notifications/read`
+
+---
+
+## Frontend Integration Examples
+
+### 1. WebSocket Setup (Using Laravel Echo)
+
+#### Install Dependencies
+
+```bash
+npm install laravel-echo pusher-js
+```
+
+#### Configuration
+
+```javascript
+import Echo from 'laravel-echo';
+import Pusher from 'pusher-js';
+
+window.Pusher = Pusher;
+
+// Initialize Echo
+const echo = new Echo({
+    broadcaster: 'pusher',
+    key: 'akili-chat-key',
+    wsHost: 'chat.akmicroservice.com',
+    wsPort: 443,
+    wssPort: 443,
+    forceTLS: true,
+    disableStats: true,
+    enabledTransports: ['ws', 'wss'],
+    authEndpoint: '/api/v1/local/websocket/authenticate',
+    auth: {
+        headers: {
+            Authorization: `Bearer ${userToken}`
+        }
+    }
+});
+
+export default echo;
+```
+
+#### Connect and Listen for Notifications
+
+```javascript
+import echo from './echo';
+import { getAuthToken } from './auth';
+
+// Get WebSocket config
+async function setupWebSocket() {
+    const token = getAuthToken();
+    const region = 'local'; // or 'intl'
+    
+    // Get WebSocket config
+    const configResponse = await fetch(`/api/v1/${region}/websocket/config`, {
+        headers: {
+            'Authorization': `Bearer ${token}`
+        }
+    });
+    
+    const config = await configResponse.json();
+    
+    // Connect to user's private channel
+    const channel = echo.private(`user.${config.user_id}`);
+    
+    // Listen for notifications
+    channel.listen('.notification', (data) => {
+        console.log('New notification received:', data);
+        
+        // Update notification badge
+        updateNotificationBadge();
+        
+        // Show in-app notification
+        showInAppNotification(data);
+        
+        // Play sound (optional)
+        playNotificationSound();
+        
+        // Refresh notifications list
+        refreshNotificationsList();
+    });
+    
+    // Handle connection events
+    echo.connector.pusher.connection.bind('connected', () => {
+        console.log('WebSocket connected');
+    });
+    
+    echo.connector.pusher.connection.bind('disconnected', () => {
+        console.log('WebSocket disconnected');
+    });
+    
+    echo.connector.pusher.connection.bind('error', (error) => {
+        console.error('WebSocket error:', error);
+    });
+}
+
+// Call on app initialization
+setupWebSocket();
+```
+
+### 2. Web Push Setup
+
+#### Request Permission and Subscribe
+
+```javascript
+// Check if browser supports Web Push
+if ('serviceWorker' in navigator && 'PushManager' in window) {
+    async function setupWebPush() {
+        try {
+            // Request notification permission
+            const permission = await Notification.requestPermission();
+            
+            if (permission !== 'granted') {
+                console.log('Notification permission denied');
+                return;
+            }
+            
+            // Register service worker
+            const registration = await navigator.serviceWorker.register('/sw.js');
+            
+            // Get VAPID public key from backend
+            const token = getAuthToken();
+            const region = 'local'; // or your region
+            const vapidResponse = await fetch(`/api/v1/${region}/webpush/vapid-key`, {
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json',
+                },
+            });
+            
+            if (!vapidResponse.ok) {
+                console.error('Failed to get VAPID key');
+                return;
+            }
+            
+            const vapidData = await vapidResponse.json();
+            const vapidPublicKey = vapidData.vapid_public_key;
+            
+            // Subscribe to push notifications
+            const subscription = await registration.pushManager.subscribe({
+                userVisibleOnly: true,
+                applicationServerKey: urlBase64ToUint8Array(vapidPublicKey)
+            });
+            
+            // Convert subscription to format backend expects
+            const subscriptionData = {
+                endpoint: subscription.endpoint,
+                keys: {
+                    p256dh: arrayBufferToBase64(subscription.getKey('p256dh')),
+                    auth: arrayBufferToBase64(subscription.getKey('auth'))
+                }
+            };
+            
+            // Send subscription to backend
+            const token = getAuthToken();
+            const region = 'local';
+            
+            const response = await fetch(`/api/v1/${region}/webpush/subscribe`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(subscriptionData)
+            });
+            
+            if (response.ok) {
+                console.log('Web Push subscription successful');
+            } else {
+                console.error('Web Push subscription failed');
+            }
+        } catch (error) {
+            console.error('Web Push setup error:', error);
+        }
+    }
+    
+    // Helper functions
+    function urlBase64ToUint8Array(base64String) {
+        const padding = '='.repeat((4 - base64String.length % 4) % 4);
+        const base64 = (base64String + padding)
+            .replace(/\-/g, '+')
+            .replace(/_/g, '/');
+        
+        const rawData = window.atob(base64);
+        const outputArray = new Uint8Array(rawData.length);
+        
+        for (let i = 0; i < rawData.length; ++i) {
+            outputArray[i] = rawData.charCodeAt(i);
+        }
+        return outputArray;
+    }
+    
+    function arrayBufferToBase64(buffer) {
+        const bytes = new Uint8Array(buffer);
+        let binary = '';
+        for (let i = 0; i < bytes.byteLength; i++) {
+            binary += String.fromCharCode(bytes[i]);
+        }
+        return window.btoa(binary);
+    }
+    
+    // Call on user action (e.g., button click)
+    setupWebPush();
+}
+```
+
+#### Service Worker (sw.js)
+
+Create a service worker file in your `public` directory:
+
+```javascript
+// public/sw.js
+self.addEventListener('push', function(event) {
+    const data = event.data ? event.data.json() : {};
+    
+    const title = data.title || 'Notification';
+    const options = {
+        body: data.message || '',
+        icon: data.icon || '/icon-192x192.png',
+        badge: data.badge || '/badge-72x72.png',
+        data: data.data || {},
+        tag: data.tag || null,
+        requireInteraction: data.requireInteraction || false
+    };
+    
+    event.waitUntil(
+        self.registration.showNotification(title, options)
+    );
+});
+
+// Handle notification click
+self.addEventListener('notificationclick', function(event) {
+    event.notification.close();
+    
+    const data = event.notification.data;
+    
+    // Open app or specific URL
+    if (data.action_url) {
+        event.waitUntil(
+            clients.openWindow(data.action_url)
+        );
+    } else {
+        event.waitUntil(
+            clients.openWindow('/')
+        );
+    }
+});
+```
+
+### 3. Complete Notification Manager
+
+```javascript
+class NotificationManager {
+    constructor(token, region = 'local') {
+        this.token = token;
+        this.region = region;
+        this.echo = null;
+        this.notifications = [];
+        this.unreadCount = 0;
+    }
+    
+    // Initialize WebSocket connection
+    async initWebSocket() {
+        try {
+            // Get config
+            const configRes = await fetch(`/api/v1/${this.region}/websocket/config`, {
+                headers: { 'Authorization': `Bearer ${this.token}` }
+            });
+            const config = await configRes.json();
+            
+            // Setup Echo (see WebSocket setup above)
+            this.echo = new Echo({
+                broadcaster: 'pusher',
+                key: 'akili-chat-key',
+                wsHost: 'chat.akmicroservice.com',
+                wsPort: 443,
+                wssPort: 443,
+                forceTLS: true,
+                authEndpoint: `/api/v1/${this.region}/websocket/authenticate`,
+                auth: {
+                    headers: { Authorization: `Bearer ${this.token}` }
+                }
+            });
+            
+            // Listen for notifications
+            this.echo.private(`user.${config.user_id}`)
+                .listen('.notification', (data) => {
+                    this.handleNotification(data);
+                });
+        } catch (error) {
+            console.error('WebSocket init failed:', error);
+        }
+    }
+    
+    // Handle incoming notification
+    handleNotification(notificationData) {
+        // Add to notifications list
+        this.notifications.unshift({
+            id: notificationData.id || Date.now(),
+            ...notificationData,
+            read_at: null,
+            created_at: new Date().toISOString()
+        });
+        
+        // Update unread count
+        this.unreadCount++;
+        
+        // Update UI
+        this.updateNotificationBadge();
+        this.showInAppNotification(notificationData);
+        
+        // Trigger custom event
+        window.dispatchEvent(new CustomEvent('notification-received', {
+            detail: notificationData
+        }));
+    }
+    
+    // Load notifications from API
+    async loadNotifications() {
+        try {
+            const response = await fetch(`/api/v1/${this.region}/notifications`, {
+                headers: { 'Authorization': `Bearer ${this.token}` }
+            });
+            
+            this.notifications = await response.json();
+            this.unreadCount = this.notifications.filter(n => !n.read_at).length;
+            this.updateNotificationBadge();
+            
+            return this.notifications;
+        } catch (error) {
+            console.error('Failed to load notifications:', error);
+            return [];
+        }
+    }
+    
+    // Mark notification as read
+    async markAsRead(notificationId) {
+        try {
+            const response = await fetch(
+                `/api/v1/${this.region}/notifications/${notificationId}/read`,
+                {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${this.token}` }
+                }
+            );
+            
+            if (response.ok) {
+                const notification = this.notifications.find(n => n.id === notificationId);
+                if (notification) {
+                    notification.read_at = new Date().toISOString();
+                    this.unreadCount = Math.max(0, this.unreadCount - 1);
+                    this.updateNotificationBadge();
+                }
+            }
+        } catch (error) {
+            console.error('Failed to mark as read:', error);
+        }
+    }
+    
+    // Mark all as read
+    async markAllAsRead() {
+        try {
+            const response = await fetch(
+                `/api/v1/${this.region}/notifications/read`,
+                {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${this.token}` }
+                }
+            );
+            
+            if (response.ok) {
+                this.notifications.forEach(n => {
+                    n.read_at = new Date().toISOString();
+                });
+                this.unreadCount = 0;
+                this.updateNotificationBadge();
+            }
+        } catch (error) {
+            console.error('Failed to mark all as read:', error);
+        }
+    }
+    
+    // Update notification badge
+    updateNotificationBadge() {
+        const badge = document.getElementById('notification-badge');
+        if (badge) {
+            badge.textContent = this.unreadCount > 0 ? this.unreadCount : '';
+            badge.style.display = this.unreadCount > 0 ? 'block' : 'none';
+        }
+    }
+    
+    // Show in-app notification
+    showInAppNotification(data) {
+        // Your custom notification UI implementation
+        // Example: show toast, snackbar, etc.
+        console.log('Show notification:', data);
+    }
+    
+    // Setup Web Push
+    async setupWebPush() {
+        // See Web Push setup code above
+    }
+}
+
+// Usage
+const notificationManager = new NotificationManager(userToken, 'local');
+await notificationManager.initWebSocket();
+await notificationManager.loadNotifications();
+await notificationManager.setupWebPush();
+```
+
+---
+
+## Notification Data Structure
+
+### WebSocket Notification Event
+
+When a notification is received via WebSocket, the event data structure:
+
+```json
+{
+  "title": "Chat Session Shared",
+  "message": "John shared \"My Chat\" with you",
+  "type": "chat_session_shared",
+  "notification_type": "App\\Notifications\\ChatSessionSharedNotification",
+  "timestamp": "2025-12-01T09:00:00.000000Z",
+  "share_id": 1,
+  "share_status": "pending",
+  "original_session_id": "session-uuid",
+  "duplicated_session_id": null,
+  "action_url": "/chat/shares/1",
+  "session_title": "My Chat",
+  "sharer_name": "John"
+}
+```
+
+### Database Notification Structure
+
+When fetching from `/api/v1/{region}/notifications`:
+
+```json
+{
+  "id": "uuid-here",
+  "type": "App\\Notifications\\ChatSessionSharedNotification",
+  "data": {
+    "title": "Chat Session Shared",
+    "message": "John shared \"My Chat\" with you",
+    "type": "chat_session_shared",
+    "share_id": 1,
+    "action_url": "/chat/shares/1"
+  },
+  "read_at": null,
+  "created_at": "2025-12-01T09:00:00.000000Z",
+  "updated_at": "2025-12-01T09:00:00.000000Z"
+}
+```
+
+### Notification Types
+
+Common notification types you may receive:
+
+- `chat_session_shared` - Chat session shared with user
+- `quota_exceeded` - Token quota exceeded
+- `usage_warning` - Usage warning (80% threshold)
+- `token_quota_warning` - Token quota warning
+- `admin_broadcast` - Admin broadcast message
+
+---
+
+## Best Practices
+
+### 1. Connection Management
+
+- **Connect on login**: Initialize WebSocket when user logs in
+- **Disconnect on logout**: Clean up WebSocket connection
+- **Reconnect on error**: Handle disconnections gracefully
+- **Check connection status**: Show connection indicator
+
+### 2. Notification Handling
+
+- **Deduplicate**: Check if notification already exists before adding
+- **Update badge**: Always update unread count badge
+- **Mark as read**: Mark notifications as read when user views them
+- **Handle clicks**: Navigate to relevant page when notification clicked
+
+### 3. Web Push
+
+- **Request permission**: Ask for permission at appropriate time (not immediately)
+- **Handle denial**: Gracefully handle permission denial
+- **Unsubscribe**: Allow users to unsubscribe
+- **Service worker**: Ensure service worker is registered and active
+
+### 4. Error Handling
+
+- **WebSocket errors**: Fall back to polling if WebSocket fails
+- **API errors**: Handle 401 (unauthorized), 500 (server error), etc.
+- **Network errors**: Retry failed requests
+- **User feedback**: Show error messages to users
+
+### 5. Performance
+
+- **Limit polling**: Don't poll if WebSocket is connected
+- **Batch updates**: Batch UI updates when multiple notifications arrive
+- **Cache notifications**: Cache notifications locally
+- **Lazy load**: Load older notifications on demand
+
+---
+
+## Migration Guide
+
+### For Existing Frontends
+
+If you're already using the notification API:
+
+1. **Keep existing code**: All existing endpoints still work
+2. **Add WebSocket**: Add WebSocket connection for real-time updates
+3. **Add Web Push**: Optionally add Web Push for browser notifications
+4. **Reduce polling**: Reduce or remove polling if WebSocket is connected
+
+### Before (Polling)
+
+```javascript
+// Old way: Poll every 30 seconds
+setInterval(async () => {
+    const notifications = await fetchNotifications();
+    updateUI(notifications);
+}, 30000);
+```
+
+### After (WebSocket + Polling Fallback)
+
+```javascript
+// New way: Real-time via WebSocket, fallback to polling
+try {
+    await setupWebSocket(); // Real-time
+} catch (error) {
+    // Fallback to polling if WebSocket fails
+    setInterval(async () => {
+        const notifications = await fetchNotifications();
+        updateUI(notifications);
+    }, 30000);
+}
+```
+
+---
+
+## Testing
+
+### Test WebSocket Connection
+
+```javascript
+// Check if WebSocket is connected
+if (echo.connector.pusher.connection.state === 'connected') {
+    console.log('WebSocket connected');
+} else {
+    console.log('WebSocket not connected');
+}
+```
+
+### Test Web Push
+
+1. Request permission
+2. Subscribe
+3. Send test notification from admin panel
+4. Verify browser shows notification
+
+### Test Notifications
+
+1. Use admin notifier: `https://chat.akmicroservice.com/admin/notifier`
+2. Select user
+3. Select "WebSocket" channel
+4. Send test notification
+5. Verify frontend receives it
+
+---
+
+## Troubleshooting
+
+### WebSocket Not Connecting
+
+- Check if service is running: `systemctl status akili-websocket`
+- Check browser console for errors
+- Verify token is valid
+- Check CORS settings
+- Verify WebSocket URL is correct
+
+### Web Push Not Working
+
+- Check browser permission (must be "granted")
+- Verify service worker is registered
+- Check VAPID keys are configured
+- Verify subscription was saved to backend
+- Check browser console for errors
+
+### Notifications Not Appearing
+
+- Check WebSocket connection status
+- Verify user preferences allow notifications
+- Check notification logs in backend
+- Verify notification was sent via correct channel
+
+---
+
+## API Endpoints Summary
+
+### WebSocket
+- `GET /api/v1/{region}/websocket/config` - Get WebSocket config
+- `POST /api/v1/{region}/websocket/authenticate` - Authenticate connection
+
+### Web Push
+- `POST /api/v1/{region}/webpush/subscribe` - Subscribe to Web Push
+- `POST /api/v1/{region}/webpush/unsubscribe` - Unsubscribe from Web Push
+- `GET /api/v1/{region}/webpush/subscriptions` - Get user's subscriptions
+
+### Notifications (Existing)
+- `GET /api/v1/{region}/notifications` - Get notifications
+- `POST /api/v1/{region}/notifications/{id}/read` - Mark as read
+- `POST /api/v1/{region}/notifications/read` - Mark all as read
+
+---
+
+## Support
+
+For issues or questions:
+- Check logs: Backend logs show notification delivery status
+- Test endpoints: Use curl or Postman to test APIs
+- Check service status: Verify WebSocket service is running
+
+---
+
+## Quick Start Checklist
+
+- [ ] Install Laravel Echo and Pusher JS
+- [ ] Create service worker file (`sw.js`)
+- [ ] Initialize WebSocket connection on login
+- [ ] Listen for notification events
+- [ ] Request Web Push permission
+- [ ] Subscribe to Web Push
+- [ ] Update notification badge
+- [ ] Handle notification clicks
+- [ ] Test with admin notifier
+- [ ] Handle errors and fallbacks
+
+---
+
+**Last Updated:** 2025-12-01
+**Version:** 2.0 (WebSocket & Web Push)
+
