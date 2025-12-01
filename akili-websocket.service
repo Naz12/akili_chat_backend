@@ -8,7 +8,7 @@ Restart=always
 RestartSec=5
 User=deploy_user_dagi
 Group=deploy_user_dagi
-ExecStart=/usr/bin/docker run --rm --name akili-websocket -p 6001:6001 -p 9601:9601 -e SOKETI_APP_ID=akili-chat -e SOKETI_APP_KEY=akili-chat-key -e SOKETI_APP_SECRET=akili-chat-secret -e SOKETI_DEBUG=1 akili-soketi:latest
+ExecStart=/usr/bin/docker run --rm --name akili-websocket -p 6001:6001 -p 9601:9601 -e SOKETI_DEBUG=1 -e SOKETI_DEFAULT_APP_ID=akili-chat -e SOKETI_DEFAULT_APP_KEY=akili-chat-key -e SOKETI_DEFAULT_APP_SECRET=akili-chat-secret akili-soketi:latest
 ExecStop=/usr/bin/docker stop akili-websocket
 StandardOutput=append:/var/log/akili-websocket.log
 StandardError=append:/var/log/akili-websocket.log

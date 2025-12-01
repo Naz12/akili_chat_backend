@@ -131,11 +131,11 @@ class NotifierController extends Controller
                 } else {
                     $errorCount++;
                     Log::warning('Admin broadcast failed for user', [
-                        'user_id' => $user->id,
+                    'user_id' => $user->id,
                         'channels' => $notificationChannels,
                         'results' => $results,
-                    ]);
-                }
+                ]);
+            }
             } catch (\Exception $e) {
                 $errorCount++;
                 Log::error('Admin broadcast exception', [

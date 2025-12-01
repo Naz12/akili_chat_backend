@@ -1,0 +1,9 @@
+{
+  "apps": [
+    {
+      "id": "akili-chat",
+      "key": "akili-chat-key",
+      "secret": "akili-chat-secret"
+    }
+  ]
+}

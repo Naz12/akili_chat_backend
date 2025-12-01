@@ -11,5 +11,6 @@ RUN npm install -g @soketi/soketi
 
 EXPOSE 6001 9601
 
+# Start Soketi - will use environment variables for app configuration
 CMD ["soketi", "start", "--host", "0.0.0.0", "--port", "6001", "--debug"]
 
