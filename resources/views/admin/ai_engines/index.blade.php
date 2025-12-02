@@ -10,9 +10,18 @@
             </h2>
             <p class="text-muted mb-0" style="font-size: 0.9rem;">Manage and monitor AI engine configurations</p>
         </div>
-        <a href="{{ route('admin.ai-engines.create') }}" class="btn btn-primary">
-            <i class="fas fa-plus-circle me-2"></i> Add New Engine
-        </a>
+        <div class="d-flex gap-2">
+            <x-export-button 
+                route="{{ route('admin.ai-engines.export') }}"
+                title="Export AI Engines"
+                :currentCount="$engines->count()"
+                :totalCount="$engines->count()"
+                :hasFilters="false"
+            />
+            <a href="{{ route('admin.ai-engines.create') }}" class="btn btn-primary">
+                <i class="fas fa-plus-circle me-2"></i> Add New Engine
+            </a>
+        </div>
     </div>
 
     {{-- Engine Status Metrics --}}

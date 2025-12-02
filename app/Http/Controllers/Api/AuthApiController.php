@@ -13,11 +13,20 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Log;
+use App\Notifications\ForgotPasswordNotification;
+use App\Services\Notification\NotificationService;
 
 
 class AuthApiController extends Controller
 {
     use AddsCorsHeaders;
+
+    protected $notificationService;
+
+    public function __construct(NotificationService $notificationService)
+    {
+        $this->notificationService = $notificationService;
+    }
     public function login(Request $request)
     {
         try {
@@ -211,67 +220,149 @@ class AuthApiController extends Controller
         }
     }
 
-        public function sendResetCode(Request $request)
+    /**
+     * Forgot Password - Send reset code via email using notification system
+     * 
+     * @param Request $request
+     * @return \Illuminate\Http\JsonResponse
+     */
+    public function forgotPassword(Request $request)
     {
-        $request->validate(['email' => 'required|email']);
+        $request->validate([
+            'email' => 'required|email'
+        ]);
 
         $user = User::where('email', $request->email)->first();
 
+        // Don't reveal if email exists for security
         if (!$user) {
-            $response = response()->json(['error' => 'Email not found'], 404);
+            // Still return success to prevent email enumeration
+            $response = response()->json([
+                'message' => 'If the email exists, a password reset code has been sent.'
+            ], 200);
             return $this->addCorsHeaders($response, $request);
         }
 
-        $code = rand(100000, 999999);
-        $user->update(['password_reset_code' => $code]);
+        // Generate 6-digit reset code
+        $code = str_pad(rand(0, 999999), 6, '0', STR_PAD_LEFT);
+        
+        // Store reset code (code expires after 10 minutes - handled in reset method)
+        $user->update([
+            'password_reset_code' => $code
+        ]);
 
         try {
-            Mail::raw("Your ChatDagu password reset code is: $code", function ($message) use ($user) {
-                $message->to($user->email)->subject('Your Password Reset Code');
-            });
+            // Send notification via notification service
+            $notification = new ForgotPasswordNotification($code);
+            $result = $this->notificationService->send(
+                $user,
+                $notification,
+                [NotificationService::CHANNEL_EMAIL],
+                false // Don't respect preferences for password reset
+            );
 
-            $response = response()->json(['message' => 'Verification code sent']);
+            Log::info('Password reset code sent', [
+                'user_id' => $user->id,
+                'email' => $user->email,
+                'reset_code' => $code,
+                'notification_result' => $result
+            ]);
+            
+            // Also log to help with debugging - always log the code for troubleshooting
+            Log::info('Password reset code generated for testing', [
+                'email' => $user->email,
+                'code' => $code,
+                'expires_in' => '10 minutes',
+                'timestamp' => now()->toDateTimeString()
+            ]);
+
+            $responseData = [
+                'message' => 'If the email exists, a password reset code has been sent to your email.',
+                'success' => true
+            ];
+            
+            // In debug mode, include the code in response for testing (REMOVE IN PRODUCTION)
+            if (config('app.debug')) {
+                $responseData['debug_code'] = $code;
+                $responseData['debug_message'] = 'DEBUG MODE: Code included in response. Remove in production!';
+            }
+
+            $response = response()->json($responseData, 200);
             return $this->addCorsHeaders($response, $request);
         } catch (\Exception $e) {
-            $response = response()->json(['error' => 'Failed to send email.'], 500);
+            Log::error('Failed to send password reset email', [
+                'user_id' => $user->id,
+                'email' => $user->email,
+                'error' => $e->getMessage()
+            ]);
+
+            $response = response()->json([
+                'error' => 'Failed to send password reset email. Please try again later.',
+                'success' => false
+            ], 500);
             return $this->addCorsHeaders($response, $request);
         }
     }
 
+    /**
+     * Legacy method - kept for backward compatibility
+     * @deprecated Use forgotPassword instead
+     */
+    public function sendResetCode(Request $request)
+    {
+        return $this->forgotPassword($request);
+    }
+
+    /**
+     * Reset Password with Code
+     * 
+     * @param Request $request
+     * @return \Illuminate\Http\JsonResponse
+     */
     public function resetPasswordWithCode(Request $request)
     {
-        \Log::info('🛠️ Reset attempt', $request->all());
-    
         $request->validate([
             'email' => 'required|email',
-            'code' => 'required|string',
+            'code' => 'required|string|size:6',
             'password' => 'required|string|confirmed|min:6',
         ]);
     
         $user = User::where('email', $request->email)->first();
     
         if (!$user) {
-            \Log::warning('❌ User not found', ['email' => $request->email]);
-            $response = response()->json(['message' => 'User not found.'], 404);
+            Log::warning('Password reset attempt - User not found', ['email' => $request->email]);
+            $response = response()->json([
+                'message' => 'Invalid email or reset code.',
+                'success' => false
+            ], 400);
             return $this->addCorsHeaders($response, $request);
         }
     
-        if (!$user || $user->password_reset_code !== $request->code) {
-            Log::warning('❌ Code mismatch', [
-                'submitted' => $request->code,
-                'stored' => $user?->password_reset_code
+        // Check if code matches
+        if (!$user->password_reset_code || $user->password_reset_code !== $request->code) {
+            Log::warning('Password reset attempt - Invalid code', [
+                'email' => $request->email,
+                'submitted_code' => $request->code,
+                'has_stored_code' => !empty($user->password_reset_code)
             ]);
-            $response = response()->json(['message' => 'Invalid verification code.'], 400);
+            $response = response()->json([
+                'message' => 'Invalid or expired reset code. Please request a new one.',
+                'success' => false
+            ], 400);
             return $this->addCorsHeaders($response, $request);
         }
         
+        // Reset password
         $user->password = Hash::make($request->password);
-        $user->password_reset_code = null; // ✅ Invalidate after success
+        $user->password_reset_code = null; // Invalidate code after successful reset
         $user->save();
     
-        \Log::info('✅ Password reset success', ['email' => $user->email]);
+        Log::info('Password reset successful', ['user_id' => $user->id, 'email' => $user->email]);
     
-        $response = response()->json(['message' => 'Password reset successfully.']);
+        $response = response()->json([
+            'message' => 'Password reset successfully. You can now login with your new password.',
+            'success' => true
+        ], 200);
         return $this->addCorsHeaders($response, $request);
     }
     

@@ -38,13 +38,30 @@ class EmailChannel implements ChannelInterface
         // MailMessage::render() returns HtmlString, so we convert it to string
         $htmlContent = (string) $mailMessage->render();
         
-        Mail::send([], [], function ($message) use ($mailMessage, $user, $htmlContent) {
-            $message->to($user->email)
-                    ->subject($mailMessage->subject ?? 'Notification')
-                    ->html($htmlContent);
-        });
+        try {
+            Mail::send([], [], function ($message) use ($mailMessage, $user, $htmlContent) {
+                $message->to($user->email)
+                        ->subject($mailMessage->subject ?? 'Notification')
+                        ->html($htmlContent);
+            });
 
-        return ['status' => 'sent', 'email' => $user->email];
+            Log::info('Email sent successfully', [
+                'user_id' => $user->id,
+                'email' => $user->email,
+                'subject' => $mailMessage->subject ?? 'Notification'
+            ]);
+
+            return ['status' => 'sent', 'email' => $user->email];
+        } catch (\Exception $e) {
+            Log::error('Failed to send email via SMTP', [
+                'user_id' => $user->id,
+                'email' => $user->email,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            
+            throw $e; // Re-throw to let the caller handle it
+        }
     }
 }
 

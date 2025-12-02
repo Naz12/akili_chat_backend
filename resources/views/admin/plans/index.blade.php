@@ -9,9 +9,18 @@
             </h2>
             <p class="text-muted mb-0" style="font-size: 0.9rem;">Manage subscription tiers and pricing</p>
         </div>
-        <a href="{{ route('admin.plans.create') }}" class="btn btn-primary">
-            <i class="fas fa-plus-circle me-2"></i> Add Plan
-        </a>
+        <div class="d-flex gap-2">
+            <x-export-button 
+                route="{{ route('admin.plans.export') }}"
+                title="Export Plans"
+                :currentCount="$plans->count()"
+                :totalCount="$plans->count()"
+                :hasFilters="false"
+            />
+            <a href="{{ route('admin.plans.create') }}" class="btn btn-primary">
+                <i class="fas fa-plus-circle me-2"></i> Add Plan
+            </a>
+        </div>
     </div>
 
     <div class="card shadow-sm">

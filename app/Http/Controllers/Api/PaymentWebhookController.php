@@ -393,7 +393,7 @@ class PaymentWebhookController extends Controller
             }
 
             $plan = $subscription->plan;
-            $gracePeriodDays = config('subscriptions.grace_period_days', 3);
+            $gracePeriodDays = \App\Models\SystemSetting::getValue('payment.grace_period_days', 3);
 
             // Create bill for manual payment
             $bill = Bill::create([

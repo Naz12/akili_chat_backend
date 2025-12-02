@@ -16,7 +16,10 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware) {
         $middleware->alias([
             'ensure.region.match' => EnsureRegionMatchesUser::class,
-            'quota.check'          => EnsureUsageQuota::class, // ✅ Add this line
+            'quota.check'          => EnsureUsageQuota::class,
+            'permission' => \App\Http\Middleware\PermissionMiddleware::class,
+            'super.admin' => \App\Http\Middleware\SuperAdminMiddleware::class,
+            'role.management' => \App\Http\Middleware\RoleManagementMiddleware::class,
         ]);
         
         // Enable CORS for ALL routes - must be first to handle OPTIONS requests

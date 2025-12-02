@@ -21,11 +21,20 @@ class AdminMiddleware
         /** @var \App\Models\User $user */
         $user = $request->user();
 
+        if (!$user) {
+            abort(401, 'Unauthenticated');
+        }
 
-        if (auth()->check() && auth()->user()->isAdmin()) {
-            return $next($request);
+        // Check if user is admin (has roles/permissions or legacy admin role)
+        if (!$user->isAdmin()) {
+            abort(403, 'Access denied. Admin privileges required.');
+        }
+
+        // Check if user is active
+        if (!$user->isActive()) {
+            abort(403, 'Your account has been deactivated. Please contact an administrator.');
         }
     
-        abort(403); // or redirect('/login')
+        return $next($request);
     }
 }

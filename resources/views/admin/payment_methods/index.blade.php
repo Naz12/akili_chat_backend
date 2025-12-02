@@ -3,8 +3,19 @@
 @section('title', 'Payment Methods')
 
 @section('content')
-    <h2 class="mb-3">Payment Methods</h2>
-    <a href="{{ route('admin.payment-methods.create') }}" class="btn btn-primary mb-3">Add New Payment Method</a>
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h2 class="mb-0">Payment Methods</h2>
+        <div class="d-flex gap-2">
+            <x-export-button 
+                route="{{ route('admin.payment-methods.export') }}"
+                title="Export Payment Methods"
+                :currentCount="$methods->count()"
+                :totalCount="$methods->count()"
+                :hasFilters="false"
+            />
+            <a href="{{ route('admin.payment-methods.create') }}" class="btn btn-primary">Add New Payment Method</a>
+        </div>
+    </div>
 
     <table class="table table-bordered">
         <thead>

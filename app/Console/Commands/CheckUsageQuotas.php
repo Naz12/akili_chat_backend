@@ -61,8 +61,9 @@ class CheckUsageQuotas extends Command
                     ]);
                 }
             }
-            // Check if at 80% threshold (warning)
-            elseif ($percentageUsed >= 80 && $percentageUsed < 100) {
+            // Check if at warning threshold (configurable via system settings)
+            $warningThreshold = \App\Models\SystemSetting::getValue('usage.warning_threshold_percent', 80);
+            if ($percentageUsed >= $warningThreshold && $percentageUsed < 100) {
                 try {
                     $notification = new \App\Notifications\UsageWarningNotification($subscription, $percentageUsed);
                     $notificationService->send($subscription->user, $notification);

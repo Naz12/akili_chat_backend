@@ -25,10 +25,11 @@ class GuestUserService
             return $guestSession;
         }
         
-        // Create new guest session (expires in 24 hours)
+        // Create new guest session (configurable via system settings)
+        $expirationHours = \App\Models\SystemSetting::getValue('guest.session_expiration_hours', 24);
         $guestSession = GuestSession::create([
             'device_fingerprint' => $fingerprint,
-            'expires_at' => now()->addHours(24),
+            'expires_at' => now()->addHours($expirationHours),
             'metadata' => [
                 'user_agent' => $request->userAgent(),
                 'ip' => $request->ip(),

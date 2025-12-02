@@ -22,8 +22,9 @@ class AIEngineHealthService
             $health = $this->checkEngineHealth($engine);
             $results[$engine->id] = $health;
             
-            // Cache health status for 1 hour
-            Cache::put("engine_health_{$engine->id}", $health, 3600);
+            // Cache health status (configurable via system settings)
+            $cacheHours = \App\Models\SystemSetting::getValue('cache.ai_engine_health_hours', 1);
+            Cache::put("engine_health_{$engine->id}", $health, $cacheHours * 3600);
         }
         
         return $results;

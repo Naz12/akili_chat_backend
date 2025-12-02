@@ -6,6 +6,13 @@
         <h2 class="fw-bold text-primary">
             <i class="fas fa-users me-2"></i>Visitors Analytics
         </h2>
+        <x-export-button 
+            route="{{ route('admin.visitors.export') }}"
+            title="Export Visitors"
+            :currentCount="$visitors->count()"
+            :totalCount="\App\Models\Visitor::count()"
+            :hasFilters="request()->hasAny(['country', 'is_logged_in', 'device_type', 'date_from', 'date_to'])"
+        />
     </div>
 
     <!-- Statistics Cards -->

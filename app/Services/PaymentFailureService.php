@@ -25,8 +25,8 @@ class PaymentFailureService
     public function handlePaymentFailure(Subscription $subscription, string $reason = 'Payment failed'): void
     {
         DB::transaction(function () use ($subscription, $reason) {
-            // Set grace period (3 days, configurable)
-            $gracePeriodDays = config('subscriptions.grace_period_days', 3);
+            // Set grace period (configurable via system settings)
+            $gracePeriodDays = \App\Models\SystemSetting::getValue('payment.grace_period_days', 3);
             $gracePeriodEndsAt = now()->addDays($gracePeriodDays);
             
             $subscription->update([
@@ -151,11 +151,12 @@ class PaymentFailureService
             ]);
 
             // Create new free subscription
+            $freeDurationDays = \App\Models\SystemSetting::getValue('subscription.free_duration_days', 30);
             Subscription::create([
                 'user_id' => $user->id,
                 'plan_id' => $freePlan->id,
                 'start_date' => now(),
-                'end_date' => now()->addDays(30),
+                'end_date' => now()->addDays($freeDurationDays),
                 'tokens_used' => 0,
                 'is_active' => true,
                 'auto_renew' => false,

@@ -108,8 +108,9 @@ class UsageValidatorService
                 ];
             }
             
-            // Soft limit warning at 80%
-            if ($percentageUsed >= 80 && $percentageUsed < 100) {
+            // Soft limit warning (configurable via system settings)
+            $warningThreshold = \App\Models\SystemSetting::getValue('usage.warning_threshold_percent', 80);
+            if ($percentageUsed >= $warningThreshold && $percentageUsed < 100) {
                 // Warning will be sent via notification (handled separately)
                 // Just log for now
                 \Log::info('Token quota warning threshold reached', [

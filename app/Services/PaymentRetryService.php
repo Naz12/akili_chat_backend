@@ -24,8 +24,9 @@ class PaymentRetryService
     {
         $retryCount = $payment->metadata['retry_count'] ?? 0;
         
-        // Maximum 3 retries
-        if ($retryCount >= 3) {
+        // Maximum retries (configurable via system settings)
+        $maxRetries = \App\Models\SystemSetting::getValue('payment.retry_max_attempts', 3);
+        if ($retryCount >= $maxRetries) {
             Log::info('Payment retry limit reached, triggering grace period', [
                 'payment_id' => $payment->id,
                 'retry_count' => $retryCount,
@@ -43,12 +44,16 @@ class PaymentRetryService
             return;
         }
         
-        // Schedule retry based on retry count
+        // Schedule retry based on retry count (configurable via system settings)
+        $delay1Hours = \App\Models\SystemSetting::getValue('payment.retry_delay_1', 24);
+        $delay2Days = \App\Models\SystemSetting::getValue('payment.retry_delay_2', 3);
+        $delay3Days = \App\Models\SystemSetting::getValue('payment.retry_delay_3', 7);
+        
         $delayMinutes = match($retryCount) {
-            0 => 24 * 60,      // 1 day
-            1 => 3 * 24 * 60,  // 3 days
-            2 => 7 * 24 * 60,  // 7 days
-            default => 24 * 60,
+            0 => $delay1Hours * 60,      // First retry
+            1 => $delay2Days * 24 * 60,   // Second retry
+            2 => $delay3Days * 24 * 60,   // Third retry
+            default => $delay1Hours * 60,
         };
         
         // Update metadata with retry count
@@ -108,7 +113,8 @@ class PaymentRetryService
             
             // Schedule next retry if not at limit
             $retryCount = $payment->metadata['retry_count'] ?? 0;
-            if ($retryCount < 3) {
+            $maxRetries = \App\Models\SystemSetting::getValue('payment.retry_max_attempts', 3);
+            if ($retryCount < $maxRetries) {
                 $this->scheduleRetry($payment);
             }
             

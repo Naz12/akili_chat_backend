@@ -6,9 +6,18 @@
         <h2 class="fw-bold text-primary">
             <i class="fas fa-file-invoice-dollar me-2"></i>Bills Management
         </h2>
-        <a href="{{ route('admin.billing.index') }}" class="btn btn-secondary">
-            <i class="fas fa-arrow-left"></i> Back to Billing
-        </a>
+        <div class="d-flex gap-2">
+            <x-export-button 
+                route="{{ route('admin.bills.export') }}"
+                title="Export Bills"
+                :currentCount="$bills->count()"
+                :totalCount="\App\Models\Bill::count()"
+                :hasFilters="request()->hasAny(['status', 'type', 'user_id'])"
+            />
+            <a href="{{ route('admin.billing.index') }}" class="btn btn-secondary">
+                <i class="fas fa-arrow-left"></i> Back to Billing
+            </a>
+        </div>
     </div>
 
     @if (session('success'))

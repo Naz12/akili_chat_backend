@@ -47,10 +47,13 @@ class DashboardAdminController extends Controller
                 ->where('is_active', true)
                 ->count(),
 
-            // Expiring subscriptions (next 7 days)
+            // Expiring subscriptions (configurable via system settings)
             'expiringSubscriptions' => Subscription::where('is_active', true)
                 ->where('auto_renew', true)
-                ->whereBetween('end_date', [now(), now()->addDays(7)])
+                ->whereBetween('end_date', [
+                    now(), 
+                    now()->addDays(\App\Models\SystemSetting::getValue('dashboard.expiring_subscriptions_days', 7))
+                ])
                 ->count(),
 
             // Visitor statistics

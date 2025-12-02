@@ -90,12 +90,13 @@ class SubscriptionApiController extends Controller
                     ]);
                 }
                 
-                // Calculate end_date based on billing cycle (default 30 days for free)
+                // Calculate end_date based on billing cycle (configurable via system settings)
                 $billingCycle = $plan->billing_cycle ?? 'monthly';
+                $freeDurationDays = \App\Models\SystemSetting::getValue('subscription.free_duration_days', 30);
                 $endDate = match($billingCycle) {
                     'quarterly' => now()->addMonths(3),
                     'annual' => now()->addMonths(12),
-                    default => now()->addDays(30), // monthly default for free
+                    default => now()->addDays($freeDurationDays), // monthly default for free
                 };
                 
                 return Subscription::create([
@@ -457,7 +458,7 @@ class SubscriptionApiController extends Controller
             'is_active' => true,
             'status' => 'paid',
             'start_date' => now(),
-            'end_date' => now()->addDays(30),
+            'end_date' => now()->addDays(\App\Models\SystemSetting::getValue('subscription.free_duration_days', 30)),
         ]);
     
         Log::info('Telebirr Payment Successful', [

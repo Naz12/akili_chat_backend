@@ -26,8 +26,11 @@ Route::prefix('v1')->group(function () {
     Route::post('/login', [AuthApiController::class, 'login']);
     Route::post('/refresh-token', [AuthApiController::class, 'refreshToken']);
     Route::post('/login/google', [AuthApiController::class, 'loginWithGoogle']);
-    Route::post('/send-reset-code', [AuthApiController::class, 'sendResetCode'])->middleware('throttle:3,1');
-    Route::post('/reset-password-code', [AuthApiController::class, 'resetPasswordWithCode']);
+    // Password Reset Endpoints (increased rate limit for testing)
+    Route::post('/forgot-password', [AuthApiController::class, 'forgotPassword'])->middleware('throttle:20,1');
+    Route::post('/send-reset-code', [AuthApiController::class, 'sendResetCode'])->middleware('throttle:20,1'); // Legacy endpoint
+    Route::post('/reset-password', [AuthApiController::class, 'resetPasswordWithCode'])->middleware('throttle:20,1');
+    Route::post('/reset-password-code', [AuthApiController::class, 'resetPasswordWithCode'])->middleware('throttle:20,1'); // Legacy endpoint
     
     // 📊 Visitor Tracking (Public - no auth required)
     Route::post('/visitors/track', [VisitorApiController::class, 'track'])->middleware('throttle:100,1');
@@ -37,6 +40,12 @@ Route::prefix('v1')->group(function () {
 
     foreach (['local', 'intl'] as $prefix) {
         Route::prefix($prefix)->group(function () use ($prefix) {
+            // Password Reset Endpoints (available in all regions, increased rate limit for testing)
+            Route::post('/forgot-password', [AuthApiController::class, 'forgotPassword'])->middleware('throttle:20,1');
+            Route::post('/send-reset-code', [AuthApiController::class, 'sendResetCode'])->middleware('throttle:20,1'); // Legacy endpoint
+            Route::post('/reset-password', [AuthApiController::class, 'resetPasswordWithCode'])->middleware('throttle:20,1');
+            Route::post('/reset-password-code', [AuthApiController::class, 'resetPasswordWithCode'])->middleware('throttle:20,1'); // Legacy endpoint
+            
             Route::get('/check-version', [AppVersionApiController::class, 'check']);
 
             // 💬 AI Chat + Chat History (accessible to guests and authenticated users)

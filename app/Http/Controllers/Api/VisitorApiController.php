@@ -364,7 +364,8 @@ class VisitorApiController extends Controller
                 return null;
             }
 
-            // Check cache first (24 hour cache)
+            // Check cache first (configurable via system settings)
+            $cacheHours = \App\Models\SystemSetting::getValue('cache.visitor_api_hours', 24);
             $cacheKey = "ip_geo_{$ipAddress}";
             $cachedData = Cache::get($cacheKey);
             if ($cachedData !== null) {
@@ -391,8 +392,8 @@ class VisitorApiController extends Controller
                         'timezone' => $data['timezone'] ?? null,
                     ];
                     
-                    // Cache for 24 hours
-                    Cache::put($cacheKey, $locationData, now()->addHours(24));
+                    // Cache for configured duration
+                    Cache::put($cacheKey, $locationData, now()->addHours($cacheHours));
                     
                     return $locationData;
                 }

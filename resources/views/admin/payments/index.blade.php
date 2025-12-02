@@ -8,9 +8,18 @@
 @section('content')
     <div class="d-flex justify-content-between align-items-center mb-4">
         <h2 class="fw-bold text-primary"><i class="fas fa-money-bill-wave me-2"></i>Payments</h2>
-        <a href="{{ route('admin.payments.stats') }}" class="btn btn-outline-primary">
-            <i class="fas fa-chart-bar me-2"></i>View Statistics
-        </a>
+        <div class="d-flex gap-2">
+            <x-export-button 
+                route="{{ route('admin.payments.export') }}"
+                title="Export Payments"
+                :currentCount="$payments->count()"
+                :totalCount="\App\Models\Payment::count()"
+                :hasFilters="request()->hasAny(['status', 'provider', 'date_from', 'date_to', 'user_id'])"
+            />
+            <a href="{{ route('admin.payments.stats') }}" class="btn btn-outline-primary">
+                <i class="fas fa-chart-bar me-2"></i>View Statistics
+            </a>
+        </div>
     </div>
 
     @if (session('success'))
@@ -220,7 +229,7 @@
         </div>
 
         <!-- Pagination -->
-        <div class="mt-4 d-flex justify-content-center">
+        <div class="mt-4 p-3 bg-light rounded">
             {{ $payments->links('pagination::bootstrap-5') }}
         </div>
     @else

@@ -220,9 +220,10 @@ class TokenUsageApiController extends Controller
             return response()->json(['message' => "No active {$region} subscription."], 404);
         }
 
-        // Get last 30 days of token usage
+        // Get token usage for configured period
+        $statisticsDays = \App\Models\SystemSetting::getValue('usage.statistics_period_days', 30);
         $dailyTokens = [];
-        for ($i = 29; $i >= 0; $i--) {
+        for ($i = $statisticsDays - 1; $i >= 0; $i--) {
             $date = now()->subDays($i)->toDateString();
             $tokens = TokenUsage::where('user_id', $user->id)
                 ->where('subscription_id', $subscription->id)
@@ -298,13 +299,15 @@ class TokenUsageApiController extends Controller
         $daysRemaining = now()->diffInDays($subscription->end_date, false);
 
         $warnings = [];
-        if ($tokensPercentage >= 80) {
+        $warningThreshold = \App\Models\SystemSetting::getValue('usage.warning_threshold_percent', 80);
+        
+        if ($tokensPercentage >= $warningThreshold) {
             $warnings[] = 'token_quota_warning';
         }
         if ($tokensPercentage >= 100) {
             $warnings[] = 'token_quota_exceeded';
         }
-        if ($messagesPercentage >= 80) {
+        if ($messagesPercentage >= $warningThreshold) {
             $warnings[] = 'message_limit_warning';
         }
         if ($messagesPercentage >= 100) {

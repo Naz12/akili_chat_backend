@@ -4,7 +4,16 @@
 
 @section('content')
     <div class="container">
-        <h2 class="mb-4">User Notification Preferences</h2>
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h2 class="mb-0">User Notification Preferences</h2>
+            <x-export-button 
+                route="{{ route('admin.preferences.export') }}"
+                title="Export Preferences"
+                :currentCount="$preferences->count()"
+                :totalCount="\App\Models\Preference::count()"
+                :hasFilters="false"
+            />
+        </div>
 
         @if (session('success'))
             <div class="alert alert-success">{{ session('success') }}</div>

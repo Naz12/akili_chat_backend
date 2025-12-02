@@ -30,6 +30,8 @@ class User extends Authenticatable implements JWTSubject
         'password',
         'region',
         'password_reset_code',
+        'is_active',
+        'last_login_at',
     ];
 
     /**
@@ -52,6 +54,8 @@ class User extends Authenticatable implements JWTSubject
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
+            'is_active' => 'boolean',
+            'last_login_at' => 'datetime',
         ];
     }
 
@@ -63,12 +67,6 @@ class User extends Authenticatable implements JWTSubject
     public function getJWTCustomClaims()
     {
         return [];
-    }
-
-    
-    public function isAdmin()
-    {
-        return $this->role === 'admin';
     }
 
     public function isStaff()
@@ -120,6 +118,117 @@ class User extends Authenticatable implements JWTSubject
     public function payments()
     {
         return $this->hasMany(Payment::class);
+    }
+
+    // RBAC Relationships
+    public function roles()
+    {
+        return $this->belongsToMany(Role::class, 'user_roles')->withTimestamps();
+    }
+
+    public function permissions()
+    {
+        return $this->belongsToMany(Permission::class, 'user_permissions')->withTimestamps();
+    }
+
+    public function adminActivityLogs()
+    {
+        return $this->hasMany(AdminActivityLog::class, 'admin_id');
+    }
+
+    // RBAC Methods
+    public function hasRole(string $roleSlug): bool
+    {
+        return $this->roles()->where('slug', $roleSlug)->exists();
+    }
+
+    public function hasAnyRole(array $roleSlugs): bool
+    {
+        return $this->roles()->whereIn('slug', $roleSlugs)->exists();
+    }
+
+    public function isSuperAdmin(): bool
+    {
+        return $this->roles()->where('is_super_admin', true)->exists();
+    }
+
+    public function hasPermission(string $permissionSlug): bool
+    {
+        // Super admin has all permissions
+        if ($this->isSuperAdmin()) {
+            return true;
+        }
+
+        // Check direct permissions
+        if ($this->permissions()->where('slug', $permissionSlug)->exists()) {
+            return true;
+        }
+
+        // Check permissions via roles
+        return $this->roles()
+            ->whereHas('permissions', function ($query) use ($permissionSlug) {
+                $query->where('slug', $permissionSlug);
+            })
+            ->exists();
+    }
+
+    public function hasAnyPermission(array $permissionSlugs): bool
+    {
+        if ($this->isSuperAdmin()) {
+            return true;
+        }
+
+        // Check direct permissions
+        if ($this->permissions()->whereIn('slug', $permissionSlugs)->exists()) {
+            return true;
+        }
+
+        // Check permissions via roles
+        return $this->roles()
+            ->whereHas('permissions', function ($query) use ($permissionSlugs) {
+                $query->whereIn('slug', $permissionSlugs);
+            })
+            ->exists();
+    }
+
+    public function getAllPermissions()
+    {
+        if ($this->isSuperAdmin()) {
+            return Permission::all();
+        }
+
+        // Get permissions from roles
+        $rolePermissions = $this->roles()
+            ->with('permissions')
+            ->get()
+            ->pluck('permissions')
+            ->flatten()
+            ->unique('id');
+
+        // Get direct permissions
+        $directPermissions = $this->permissions;
+
+        // Merge and return unique permissions
+        return $rolePermissions->merge($directPermissions)->unique('id');
+    }
+
+    public function canManageAdmins(): bool
+    {
+        return $this->hasPermission('admins.manage_roles') || $this->isSuperAdmin();
+    }
+
+    public function isActive(): bool
+    {
+        return $this->is_active === true;
+    }
+
+    public function isAdmin(): bool
+    {
+        // Check if user has any admin role or admin permission
+        return $this->roles()->exists() || 
+               $this->permissions()->exists() || 
+               $this->role === 'admin' ||
+               $this->isSuperAdmin();
     }
     
 

@@ -4,6 +4,25 @@
 @section('content')
     <div class="d-flex justify-content-between align-items-center mb-4">
         <h2 class="fw-bold text-primary"><i class="fas fa-file-invoice-dollar me-2"></i>Billing Overview</h2>
+        <div class="d-flex gap-2">
+            @if(($tab ?? 'subscriptions') === 'bills')
+                <x-export-button 
+                    route="{{ route('admin.bills.export') }}"
+                    title="Export Bills"
+                    :currentCount="isset($bills) ? $bills->count() : 0"
+                    :totalCount="\App\Models\Bill::count()"
+                    :hasFilters="false"
+                />
+            @else
+                <x-export-button 
+                    route="{{ route('admin.billing.export-subscriptions') }}"
+                    title="Export Subscriptions"
+                    :currentCount="$subscriptions->count()"
+                    :totalCount="\App\Models\Subscription::count()"
+                    :hasFilters="false"
+                />
+            @endif
+        </div>
     </div>
 
     @if (session('success'))
@@ -102,10 +121,14 @@
                                 <td>
                                     @if ($bill->status === 'paid')
                                         <span class="badge bg-success">Paid</span>
-                                    @elseif ($bill->status === 'pending' && $bill->due_date && $bill->due_date < now())
+                                    @elseif ($bill->status === 'cancelled')
+                                        <span class="badge bg-secondary">Cancelled</span>
+                                    @elseif ($bill->status === 'overdue' || ($bill->status === 'pending' && $bill->due_date && $bill->due_date < now()))
                                         <span class="badge bg-danger">Overdue</span>
-                                    @else
+                                    @elseif ($bill->status === 'pending')
                                         <span class="badge bg-warning">Pending</span>
+                                    @else
+                                        <span class="badge bg-info">{{ ucfirst($bill->status) }}</span>
                                     @endif
                                 </td>
                                 <td>{{ number_format($bill->amount, 2) }} {{ $bill->currency }}</td>
@@ -122,8 +145,8 @@
                 </table>
             </div>
 
-            <div class="mt-3">
-                {{ $bills->links() }}
+            <div class="mt-4 p-3 bg-light rounded">
+                {{ $bills->links('pagination::bootstrap-5') }}
             </div>
         @else
             <div class="alert alert-info">
@@ -204,8 +227,8 @@
             </table>
         </div>
 
-        <div class="mt-3">
-            {{ $subscriptions->links() }}
+        <div class="mt-4 p-3 bg-light rounded">
+            {{ $subscriptions->links('pagination::bootstrap-5') }}
         </div>
     @else
         <div class="alert alert-info">

@@ -3,12 +3,14 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Models\AIEngine;
+use App\Services\ExportService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use App\Http\Controllers\Controller;
 use Illuminate\Support\Facades\Http;
 use App\Services\ModelPricingService;
 use Illuminate\Support\Facades\Crypt;
+use Illuminate\Support\Collection;
 
 class AIEngineAdminController extends Controller
 {
@@ -190,5 +192,63 @@ class AIEngineAdminController extends Controller
             ->first();
 
         return view('admin.ai_engines.stats', compact('engine', 'logs'));
+    }
+
+    /**
+     * Export AI engines to Excel or PDF
+     */
+    public function export(Request $request)
+    {
+        try {
+            $format = $request->get('format', 'excel');
+            $range = $request->get('range', 'all'); // Engines are usually small
+
+            $query = AIEngine::withCount('plans')->orderBy('priority_order');
+
+            // Apply date filters (works with all ranges)
+            if ($request->filled('date_from')) {
+                $query->whereDate('created_at', '>=', $request->date_from);
+            }
+            if ($request->filled('date_to')) {
+                $query->whereDate('created_at', '<=', $request->date_to);
+            }
+
+            // Get data based on range
+            if ($range === 'current') {
+                $engines = $query->paginate(20);
+                $engines = $engines->items();
+            } elseif ($range === 'custom') {
+                $limit = min((int) $request->get('limit', 100), 10000); // Max 10,000
+                $engines = $query->limit($limit)->get();
+            } else {
+                $engines = $query->get();
+            }
+
+            $exportData = Collection::make($engines)->map(function ($engine) {
+                return [
+                    'ID' => $engine->id,
+                    'Name' => $engine->name,
+                    'Provider' => ucfirst($engine->provider),
+                    'Max Tokens' => number_format($engine->max_tokens),
+                    'Price per 1K' => '$' . number_format($engine->price_per_1k, 4),
+                    'Status' => $engine->is_active ? 'Active' : 'Inactive',
+                    'Vision Support' => $engine->is_vision_support ? 'Yes' : 'No',
+                    'Priority Order' => $engine->priority_order ?? 0,
+                    'Plans Count' => $engine->plans_count ?? 0,
+                ];
+            });
+
+            $headers = ['ID', 'Name', 'Provider', 'Max Tokens', 'Price per 1K', 'Status', 'Vision Support', 'Priority Order', 'Plans Count'];
+            $filename = 'ai_engines_' . now()->format('Y-m-d_H-i-s');
+
+            if ($format === 'pdf') {
+                return ExportService::exportToPdf($exportData, $headers, 'AI Engines Export', $filename);
+            }
+
+            return ExportService::exportToExcel($exportData, $headers, $filename);
+        } catch (\Exception $e) {
+            Log::error('AI Engines export error: ' . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
+            return redirect()->back()->with('error', 'Export failed: ' . $e->getMessage());
+        }
     }
 }

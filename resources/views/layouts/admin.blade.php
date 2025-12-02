@@ -152,33 +152,69 @@
             }
         }
 
-        /* Pagination fixes */
+        /* Improved Pagination Styles */
+        .pagination-wrapper {
+            flex-shrink: 0;
+        }
+
+        .pagination-info {
+            font-size: 0.875rem;
+            white-space: nowrap;
+        }
+
         .pagination {
             margin-bottom: 0;
-            justify-content: center;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            max-width: 100%;
+            position: relative;
+            z-index: 1;
+        }
+
+        .pagination .page-item {
+            flex-shrink: 0;
+            position: relative;
+            z-index: 1;
         }
 
         .pagination .page-link {
-            border-radius: 6px;
-            margin: 0 2px;
+            border-radius: 8px;
+            margin: 0;
             color: #6366f1;
             border: 1px solid #e2e8f0;
-            padding: 6px 12px;
+            padding: 8px 14px;
             font-size: 0.875rem;
-            min-width: 38px;
+            font-weight: 500;
+            min-width: 40px;
             text-align: center;
+            transition: all 0.2s ease;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            background-color: #ffffff;
         }
 
-        .pagination .page-link:hover {
+        .pagination .page-link:hover:not(.disabled) {
             background-color: #f1f5f9;
             color: #4338ca;
             border-color: #cbd5e1;
+            transform: translateY(-1px);
+            box-shadow: 0 2px 4px rgba(99, 102, 241, 0.1);
         }
 
         .pagination .page-item.active .page-link {
             background-color: #6366f1;
             border-color: #6366f1;
             color: white;
+            font-weight: 600;
+            box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3);
+        }
+
+        .pagination .page-item.active .page-link:hover {
+            background-color: #4f46e5;
+            border-color: #4f46e5;
+            transform: translateY(-1px);
         }
 
         .pagination .page-item.disabled .page-link {
@@ -189,30 +225,21 @@
             opacity: 0.6;
         }
 
-        /* Fix for pagination arrows - make them smaller and consistent */
-        .pagination .page-link[aria-label*="previous"],
-        .pagination .page-link[aria-label*="next"],
+        .pagination .page-item.disabled .page-link:hover {
+            transform: none;
+            box-shadow: none;
+        }
+
+        /* Previous/Next buttons with text */
         .pagination .page-item:first-child .page-link,
         .pagination .page-item:last-child .page-link {
-            padding: 6px 10px !important;
-            font-size: 0.875rem !important;
-            min-width: 38px !important;
-            max-width: 38px !important;
-            width: 38px !important;
-            text-align: center !important;
-            display: inline-flex !important;
-            align-items: center !important;
-            justify-content: center !important;
-            line-height: 1 !important;
-            overflow: hidden !important;
-            box-sizing: border-box !important;
+            padding: 8px 16px;
+            min-width: auto;
+            font-weight: 500;
         }
 
         /* Ensure FontAwesome icons in pagination are properly sized */
-        .pagination .page-link i,
-        .pagination .page-link i.fas,
-        .pagination .page-link i.fa-chevron-left,
-        .pagination .page-link i.fa-chevron-right {
+        .pagination .page-link i {
             font-size: 0.75rem !important;
             line-height: 1 !important;
             width: auto !important;
@@ -224,23 +251,41 @@
             padding: 0 !important;
         }
 
-        /* Prevent any icon from expanding */
-        .pagination .page-item:first-child,
-        .pagination .page-item:last-child {
-            max-width: 38px !important;
+        /* Fix Bootstrap 5 SVG arrows in pagination */
+        .pagination .page-link svg,
+        .pagination svg {
+            width: 14px !important;
+            height: 14px !important;
+            max-width: 14px !important;
+            max-height: 14px !important;
+            display: inline-block !important;
+            vertical-align: middle !important;
             flex-shrink: 0 !important;
         }
 
-        /* Ensure pagination doesn't break layout */
-        .pagination {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 4px;
-            max-width: 100%;
+        /* Ensure no SVG arrows in pagination are positioned absolutely */
+        body .pagination svg {
+            position: static !important;
+            z-index: auto !important;
         }
 
-        .pagination .page-item {
-            flex-shrink: 0;
+        /* Responsive pagination */
+        @media (max-width: 768px) {
+            .pagination-info {
+                font-size: 0.8rem;
+                margin-bottom: 12px;
+            }
+
+            .pagination .page-link {
+                padding: 6px 10px;
+                font-size: 0.8rem;
+                min-width: 36px;
+            }
+
+            .pagination .page-item:first-child .page-link,
+            .pagination .page-item:last-child .page-link {
+                padding: 6px 12px;
+            }
         }
     </style>
 
@@ -281,6 +326,46 @@
 
     {{-- JS --}}
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    
+    {{-- Remove any stray large SVG arrows that might be covering the page --}}
+    <script>
+        (function() {
+            // Only remove very large SVG elements that are likely decorative arrows
+            function removeStraySVGs() {
+                try {
+                    // Only target SVGs that are direct children of body/html and are very large
+                    document.querySelectorAll('body > svg, html > svg').forEach(svg => {
+                        // Skip if it's part of pagination or has icon/logo classes
+                        if (svg.closest('.pagination') || 
+                            svg.classList.toString().match(/icon|logo/i)) {
+                            return;
+                        }
+                        
+                        const rect = svg.getBoundingClientRect();
+                        // Only remove if it's very large (likely a decorative arrow covering the page)
+                        if (rect.width > 500 || rect.height > 500) {
+                            svg.style.display = 'none';
+                            svg.style.visibility = 'hidden';
+                            svg.style.pointerEvents = 'none';
+                        }
+                    });
+                } catch(e) {
+                    console.warn('Error removing SVG:', e);
+                }
+            }
+            
+            // Run on page load
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', removeStraySVGs);
+            } else {
+                removeStraySVGs();
+            }
+            
+            // Run once after a short delay
+            setTimeout(removeStraySVGs, 500);
+        })();
+    </script>
+    
     @stack('scripts')
 </body>
 

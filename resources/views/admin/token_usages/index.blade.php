@@ -11,6 +11,13 @@
                 Track AI token consumption and costs across users
             </p>
         </div>
+        <x-export-button 
+            route="{{ route('admin.usage.logs.export') }}"
+            title="Export Token Usage"
+            :currentCount="$usages->count()"
+            :totalCount="\App\Models\TokenUsage::count()"
+            :hasFilters="request()->hasAny(['user_id', 'engine_id'])"
+        />
     </div>
 
     <!-- Filters -->
@@ -123,8 +130,8 @@
         </div>
         
         @if($usages->hasPages())
-            <div class="card-footer bg-white border-top" style="padding: 1rem;">
-                {{ $usages->links() }}
+            <div class="card-footer bg-white border-top" style="padding: 1.25rem;">
+                {{ $usages->links('pagination::bootstrap-5') }}
             </div>
         @endif
     </div>

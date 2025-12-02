@@ -6,7 +6,10 @@ use App\Http\Controllers\Controller;
 use App\Models\Plan;
 use App\Models\Subscription;
 use App\Models\User;
+use App\Services\ExportService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Log;
 
 class SubscriptionAdminController extends Controller
 {
@@ -252,5 +255,65 @@ class SubscriptionAdminController extends Controller
         ]);
 
         return back()->with('success', 'Payment failure count reset.');
+    }
+
+    /**
+     * Export subscriptions to Excel or PDF
+     */
+    public function export(Request $request)
+    {
+        try {
+            $format = $request->get('format', 'excel');
+            $range = $request->get('range', 'current');
+
+            $query = Subscription::with(['user', 'plan'])->latest();
+
+            // Apply date filters (works with all ranges)
+            if ($request->filled('date_from')) {
+                $query->whereDate('created_at', '>=', $request->date_from);
+            }
+            if ($request->filled('date_to')) {
+                $query->whereDate('created_at', '<=', $request->date_to);
+            }
+
+            // Get data based on range
+            if ($range === 'current') {
+                $subscriptions = $query->paginate(20);
+                $data = $subscriptions->items();
+            } elseif ($range === 'custom') {
+                $limit = min((int) $request->get('limit', 100), 10000); // Max 10,000
+                $data = $query->limit($limit)->get();
+            } else {
+                $data = $query->get();
+            }
+
+            $exportData = Collection::make($data)->map(function ($subscription) {
+                $metadata = $subscription->metadata ?? [];
+                return [
+                    'ID' => $subscription->id,
+                    'User Name' => $subscription->user->name ?? 'N/A',
+                    'User Email' => $subscription->user->email ?? 'N/A',
+                    'Plan' => $subscription->plan->name ?? 'N/A',
+                    'Start Date' => $subscription->start_date ? $subscription->start_date->format('Y-m-d') : 'N/A',
+                    'End Date' => $subscription->end_date ? $subscription->end_date->format('Y-m-d') : 'N/A',
+                    'Tokens Used' => number_format($subscription->tokens_used ?? 0),
+                    'Status' => $subscription->is_active ? 'Active' : 'Inactive',
+                    'Auto Renew' => $subscription->auto_renew ? 'Yes' : 'No',
+                    'Payment Method' => ucfirst($metadata['payment_method'] ?? 'N/A'),
+                ];
+            });
+
+            $headers = ['ID', 'User Name', 'User Email', 'Plan', 'Start Date', 'End Date', 'Tokens Used', 'Status', 'Auto Renew', 'Payment Method'];
+            $filename = 'subscriptions_' . $range . '_' . now()->format('Y-m-d_H-i-s');
+
+            if ($format === 'pdf') {
+                return ExportService::exportToPdf($exportData, $headers, 'Subscriptions Export', $filename);
+            }
+
+            return ExportService::exportToExcel($exportData, $headers, $filename);
+        } catch (\Exception $e) {
+            Log::error('Subscriptions export error: ' . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
+            return redirect()->back()->with('error', 'Export failed: ' . $e->getMessage());
+        }
     }
 }

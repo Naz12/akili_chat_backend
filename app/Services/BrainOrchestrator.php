@@ -203,8 +203,9 @@ class BrainOrchestrator
             ],
         ];
         
-        // Cache for 1 hour
-        Cache::put($cacheKey, $result, 3600);
+        // Cache (configurable via system settings)
+        $cacheHours = \App\Models\SystemSetting::getValue('cache.brain_orchestrator_hours', 1);
+        Cache::put($cacheKey, $result, $cacheHours * 3600);
         
         return $result;
     }
@@ -349,9 +350,11 @@ class BrainOrchestrator
         $totalDuration = round(microtime(true) - $startTime, 2);
         $ingestDuration = round($ingestTime - $startTime, 2);
         
-        // Cache doc_id for this content hash (24h)
-        Cache::put('brain:doc_content:' . $contentHash, $docId, 86400);
-        Cache::put($cacheKey, $docId, 86400);
+        // Cache doc_id for this content hash (configurable via system settings)
+        $cacheHours = \App\Models\SystemSetting::getValue('cache.document_service_hours', 24);
+        $cacheSeconds = $cacheHours * 3600;
+        Cache::put('brain:doc_content:' . $contentHash, $docId, $cacheSeconds);
+        Cache::put($cacheKey, $docId, $cacheSeconds);
 
         return [
             'content' => $answer,

@@ -22,7 +22,12 @@ class SubscriptionRenewalService
     /**
      * Process renewals for subscriptions expiring in the next N days
      */
-    public function processRenewals(int $daysAhead = 3): array
+    public function processRenewals(?int $daysAhead = null): array
+    {
+        // Get from system settings if not provided
+        if ($daysAhead === null) {
+            $daysAhead = \App\Models\SystemSetting::getValue('subscription.renewal_days_ahead', 3);
+        }
     {
         $results = [
             'processed' => 0,
@@ -191,11 +196,12 @@ class SubscriptionRenewalService
                 $subscription->update(['is_active' => false]);
 
                 // Create new subscription
+                $freeDurationDays = \App\Models\SystemSetting::getValue('subscription.free_duration_days', 30);
                 Subscription::create([
                     'user_id' => $subscription->user_id,
                     'plan_id' => $subscription->plan_id,
                     'start_date' => $subscription->end_date,
-                    'end_date' => $subscription->end_date->copy()->addDays(30), // Default to 30 days
+                    'end_date' => $subscription->end_date->copy()->addDays($freeDurationDays),
                     'tokens_used' => 0,
                     'is_active' => true,
                     'auto_renew' => $subscription->auto_renew,

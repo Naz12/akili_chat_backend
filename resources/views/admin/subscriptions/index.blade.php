@@ -2,8 +2,19 @@
 @section('title', 'Subscriptions')
 
 @section('content')
-    <h2 class="mb-3">Subscriptions</h2>
-    <a href="{{ route('admin.subscriptions.create') }}" class="btn btn-primary mb-3">Assign New Subscription</a>
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h2 class="mb-0">Subscriptions</h2>
+        <div class="d-flex gap-2">
+            <x-export-button 
+                route="{{ route('admin.subscriptions.export') }}"
+                title="Export Subscriptions"
+                :currentCount="$subscriptions->count()"
+                :totalCount="\App\Models\Subscription::count()"
+                :hasFilters="false"
+            />
+            <a href="{{ route('admin.subscriptions.create') }}" class="btn btn-primary">Assign New Subscription</a>
+        </div>
+    </div>
 
     <table class="table table-bordered table-hover align-middle">
         <thead class="table-dark">
