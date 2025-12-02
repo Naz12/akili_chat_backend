@@ -191,9 +191,56 @@
 
         /* Fix for pagination arrows - make them smaller and consistent */
         .pagination .page-link[aria-label*="previous"],
-        .pagination .page-link[aria-label*="next"] {
-            padding: 6px 10px;
-            font-size: 0.875rem;
+        .pagination .page-link[aria-label*="next"],
+        .pagination .page-item:first-child .page-link,
+        .pagination .page-item:last-child .page-link {
+            padding: 6px 10px !important;
+            font-size: 0.875rem !important;
+            min-width: 38px !important;
+            max-width: 38px !important;
+            width: 38px !important;
+            text-align: center !important;
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            line-height: 1 !important;
+            overflow: hidden !important;
+            box-sizing: border-box !important;
+        }
+
+        /* Ensure FontAwesome icons in pagination are properly sized */
+        .pagination .page-link i,
+        .pagination .page-link i.fas,
+        .pagination .page-link i.fa-chevron-left,
+        .pagination .page-link i.fa-chevron-right {
+            font-size: 0.75rem !important;
+            line-height: 1 !important;
+            width: auto !important;
+            height: auto !important;
+            max-width: 12px !important;
+            max-height: 12px !important;
+            display: inline-block !important;
+            margin: 0 !important;
+            padding: 0 !important;
+        }
+
+        /* Prevent any icon from expanding */
+        .pagination .page-item:first-child,
+        .pagination .page-item:last-child {
+            max-width: 38px !important;
+            flex-shrink: 0 !important;
+        }
+
+        /* Ensure pagination doesn't break layout */
+        .pagination {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            max-width: 100%;
+        }
+
+        .pagination .page-item {
+            flex-shrink: 0;
         }
     </style>
 

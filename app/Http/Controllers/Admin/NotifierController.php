@@ -106,6 +106,8 @@ class NotifierController extends Controller
 
         $successCount = 0;
         $errorCount = 0;
+        $channelStats = [];
+        $userResults = [];
 
         foreach ($users as $user) {
             try {
@@ -117,25 +119,44 @@ class NotifierController extends Controller
 
                 $results = $this->notificationService->send($user, $notification, $notificationChannels, true);
 
-                // Check if at least one channel succeeded
+                // Track channel results
+                $userChannelResults = [];
                 $hasSuccess = false;
+                
                 foreach ($results as $channel => $result) {
+                    // Initialize channel stats
+                    if (!isset($channelStats[$channel])) {
+                        $channelStats[$channel] = ['success' => 0, 'failed' => 0, 'skipped' => 0];
+                    }
+                    
                     if (isset($result['success']) && $result['success']) {
+                        $channelStats[$channel]['success']++;
+                        $userChannelResults[$channel] = 'success';
                         $hasSuccess = true;
-                        break;
+                    } elseif (isset($result['error'])) {
+                        $channelStats[$channel]['failed']++;
+                        $userChannelResults[$channel] = 'failed';
+                    } else {
+                        $channelStats[$channel]['skipped']++;
+                        $userChannelResults[$channel] = 'skipped';
                     }
                 }
+
+                $userResults[] = [
+                    'user' => $user->name . ' (' . $user->email . ')',
+                    'channels' => $userChannelResults,
+                ];
 
                 if ($hasSuccess) {
                     $successCount++;
                 } else {
                     $errorCount++;
                     Log::warning('Admin broadcast failed for user', [
-                    'user_id' => $user->id,
+                        'user_id' => $user->id,
                         'channels' => $notificationChannels,
                         'results' => $results,
-                ]);
-            }
+                    ]);
+                }
             } catch (\Exception $e) {
                 $errorCount++;
                 Log::error('Admin broadcast exception', [
@@ -146,12 +167,18 @@ class NotifierController extends Controller
             }
         }
 
+        // Build detailed message
         $message = "✅ Notifications sent to {$successCount} user(s)";
         if ($errorCount > 0) {
             $message .= ", {$errorCount} failed";
         }
 
-        return back()->with('success', $message);
+        return back()->with([
+            'success' => $message,
+            'channel_stats' => $channelStats,
+            'user_results' => $userResults,
+            'total_users' => count($users),
+        ]);
     }
 
     protected function sendFCM($token, $title, $body)
