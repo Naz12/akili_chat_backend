@@ -1,24 +1,32 @@
-<div class="sidebar"
-    style="width:260px; background: linear-gradient(180deg, #1e293b 0%, #0f172a 100%); color:#fff; position:fixed; top:0; left:0; height:100vh; display:flex; flex-direction:column; box-shadow: 2px 0 12px rgba(0,0,0,0.15);">
+<div class="sidebar" id="adminSidebar"
+    style="width:260px; background: linear-gradient(180deg, #1e293b 0%, #0f172a 100%); color:#fff; position:fixed; top:0; left:0; height:100vh; display:flex; flex-direction:column; box-shadow: 2px 0 12px rgba(0,0,0,0.15); transition: width 0.3s ease, transform 0.3s ease; z-index: 1000;">
 
     <!-- Branding -->
-    <div class="py-4 px-4 border-bottom border-secondary" style="flex-shrink: 0;">
-        <h4 class="text-white mb-0 d-flex align-items-center">
-            <i class="fas fa-robot me-2" style="font-size: 1.5rem; color: #6366f1;"></i>
-            <span style="font-weight: 700; letter-spacing: -0.5px;">ChatDagu</span>
-        </h4>
-        <small class="text-muted d-block mt-1" style="font-size: 0.75rem;">Admin Panel</small>
+    <div class="py-4 px-4 border-bottom border-secondary d-flex align-items-center justify-content-between" style="flex-shrink: 0;">
+        <div class="d-flex align-items-center" style="flex: 1; min-width: 0;">
+            <i class="fas fa-robot me-2 sidebar-icon" style="font-size: 1.5rem; color: #6366f1; flex-shrink: 0;"></i>
+            <div style="overflow: hidden;">
+                <h4 class="text-white mb-0 sidebar-brand" style="font-weight: 700; letter-spacing: -0.5px; white-space: nowrap;">
+                    <span>ChatDagu</span>
+                </h4>
+                <small class="text-muted d-block mt-1 sidebar-subtitle" style="font-size: 0.75rem; white-space: nowrap;">Admin Panel</small>
+            </div>
+        </div>
+        <button type="button" id="sidebarToggle" class="btn btn-link text-light p-1" style="border: none; background: transparent; flex-shrink: 0; margin-left: 8px;" aria-label="Toggle sidebar">
+            <i class="fas fa-bars" id="sidebarToggleIcon"></i>
+        </button>
     </div>
 
     <!-- Navigation Links -->
-    <nav class="mt-3" style="flex: 1; overflow-y: auto; overflow-x: hidden; padding-bottom: 20px;">
+    <nav class="mt-3 sidebar-nav" style="flex: 1; overflow-y: auto; overflow-x: hidden; padding-bottom: 20px;">
 
         @if(auth()->user()->hasPermission('dashboard.view') || auth()->user()->isSuperAdmin())
         <a href="{{ route('admin.dashboard') }}"
-            class="d-flex align-items-center px-4 py-3 text-decoration-none {{ request()->routeIs('admin.dashboard') ? 'bg-primary text-white' : 'text-light' }}"
-            style="transition: all 0.2s; border-left: 3px solid {{ request()->routeIs('admin.dashboard') ? '#6366f1' : 'transparent' }};">
-            <i class="fas fa-home me-3" style="width: 20px;"></i>
-            <span style="font-weight: 500;">Dashboard</span>
+            class="d-flex align-items-center px-4 py-3 text-decoration-none sidebar-link {{ request()->routeIs('admin.dashboard') ? 'bg-primary text-white' : 'text-light' }}"
+            style="transition: all 0.2s; border-left: 3px solid {{ request()->routeIs('admin.dashboard') ? '#6366f1' : 'transparent' }};"
+            title="Dashboard">
+            <i class="fas fa-home sidebar-link-icon" style="width: 20px; flex-shrink: 0;"></i>
+            <span class="sidebar-link-text" style="font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Dashboard</span>
         </a>
         @endif
 
@@ -172,12 +180,13 @@
     </nav>
 
     <!-- Logout -->
-    <div class="px-3 pb-4 pt-3 border-top border-secondary" style="flex-shrink: 0; background-color: rgba(0,0,0,0.2);">
+    <div class="px-3 pb-4 pt-3 border-top border-secondary sidebar-logout" style="flex-shrink: 0; background-color: rgba(0,0,0,0.2);">
         <form action="{{ route('logout') }}" method="POST">
             @csrf
-            <button class="btn btn-outline-light w-100 d-flex align-items-center justify-content-center"
-                style="border-radius: 10px; font-weight: 500; padding: 10px;">
-                <i class="fas fa-sign-out-alt me-2"></i> Logout
+            <button class="btn btn-outline-light w-100 d-flex align-items-center justify-content-center sidebar-logout-btn"
+                style="border-radius: 10px; font-weight: 500; padding: 10px;" title="Logout">
+                <i class="fas fa-sign-out-alt sidebar-logout-icon"></i>
+                <span class="sidebar-logout-text ms-2">Logout</span>
             </button>
         </form>
     </div>

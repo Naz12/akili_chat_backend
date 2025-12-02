@@ -15,6 +15,7 @@
     <style>
         :root {
             --sidebar-width: 260px;
+            --sidebar-width-collapsed: 70px;
             --primary-color: #4f46e5;
             --primary-hover: #4338ca;
             --sidebar-bg: #1e293b;
@@ -48,10 +49,147 @@
             padding: 24px;
             width: calc(100vw - var(--sidebar-width));
             max-width: calc(100vw - var(--sidebar-width));
-            transition: margin-left 0.3s ease;
+            transition: margin-left 0.3s ease, width 0.3s ease;
             overflow-x: auto;
             box-sizing: border-box;
             position: relative;
+        }
+
+        /* Sidebar Collapsed State */
+        .sidebar.collapsed {
+            width: var(--sidebar-width-collapsed) !important;
+        }
+
+        .sidebar.collapsed .sidebar-brand,
+        .sidebar.collapsed .sidebar-subtitle,
+        .sidebar.collapsed .sidebar-link-text,
+        .sidebar.collapsed .accordion-button span {
+            opacity: 0;
+            width: 0;
+            overflow: hidden;
+            white-space: nowrap;
+        }
+
+        .sidebar.collapsed .sidebar-link {
+            justify-content: center;
+            padding-left: 0.75rem !important;
+            padding-right: 0.75rem !important;
+        }
+
+        .sidebar.collapsed .sidebar-link-icon {
+            margin-right: 0 !important;
+        }
+
+        .sidebar.collapsed .accordion-button {
+            justify-content: center;
+            padding-left: 0.75rem !important;
+            padding-right: 0.75rem !important;
+        }
+
+        .sidebar.collapsed .accordion-button i {
+            margin-right: 0 !important;
+        }
+
+        /* Logout button styling when collapsed */
+        .sidebar.collapsed .sidebar-logout {
+            padding-left: 0.5rem !important;
+            padding-right: 0.5rem !important;
+        }
+
+        .sidebar.collapsed .sidebar-logout-btn {
+            padding: 10px !important;
+            justify-content: center !important;
+        }
+
+        .sidebar.collapsed .sidebar-logout-text {
+            display: none;
+        }
+
+        .sidebar.collapsed .sidebar-logout-icon {
+            margin-right: 0 !important;
+            margin-left: 0 !important;
+        }
+
+        .sidebar-logout-text {
+            transition: opacity 0.2s ease;
+        }
+
+        .sidebar-logout-icon {
+            transition: margin 0.3s ease;
+        }
+
+        /* Custom Scrollbar Styling for Sidebar */
+        .sidebar-nav::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .sidebar-nav::-webkit-scrollbar-track {
+            background: rgba(0, 0, 0, 0.1);
+            border-radius: 10px;
+        }
+
+        .sidebar-nav::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 10px;
+            transition: background 0.2s ease;
+        }
+
+        .sidebar-nav::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        /* Firefox scrollbar styling */
+        .sidebar-nav {
+            scrollbar-width: thin;
+            scrollbar-color: rgba(255, 255, 255, 0.2) rgba(0, 0, 0, 0.1);
+        }
+
+        body:has(.sidebar.collapsed) .main-content,
+        .sidebar.collapsed ~ .admin-wrapper .main-content {
+            margin-left: var(--sidebar-width-collapsed);
+            width: calc(100vw - var(--sidebar-width-collapsed));
+            max-width: calc(100vw - var(--sidebar-width-collapsed));
+        }
+
+        /* Smooth transitions for sidebar elements */
+        .sidebar-brand,
+        .sidebar-subtitle,
+        .sidebar-link-text {
+            transition: opacity 0.2s ease, width 0.2s ease;
+            display: inline-block;
+        }
+
+        .sidebar-link {
+            transition: padding 0.3s ease, justify-content 0.3s ease;
+        }
+
+        .sidebar-link-icon {
+            transition: margin 0.3s ease;
+        }
+
+        /* Tooltip for collapsed sidebar */
+        .sidebar.collapsed .sidebar-link,
+        .sidebar.collapsed .sidebar-logout-btn {
+            position: relative;
+        }
+
+        .sidebar.collapsed .sidebar-link:hover::after,
+        .sidebar.collapsed .sidebar-logout-btn:hover::after {
+            content: attr(title);
+            position: absolute;
+            left: 100%;
+            top: 50%;
+            transform: translateY(-50%);
+            margin-left: 10px;
+            background: #1e293b;
+            color: white;
+            padding: 8px 12px;
+            border-radius: 6px;
+            white-space: nowrap;
+            z-index: 1001;
+            box-shadow: 2px 2px 8px rgba(0,0,0,0.2);
+            font-size: 0.875rem;
+            pointer-events: none;
         }
 
         /* Card enhancements */
@@ -144,11 +282,23 @@
 
         /* Responsive */
         @media (max-width: 768px) {
+            .sidebar {
+                transform: translateX(-100%);
+            }
+
+            .sidebar.show-mobile {
+                transform: translateX(0);
+            }
+
             .main-content {
                 margin-left: 0;
                 padding: 16px;
                 width: 100%;
                 max-width: 100%;
+            }
+
+            .sidebar.collapsed {
+                transform: translateX(-100%);
             }
         }
 
@@ -326,6 +476,147 @@
 
     {{-- JS --}}
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    
+    {{-- Sidebar Toggle Functionality --}}
+    <script>
+        (function() {
+            const SIDEBAR_STORAGE_KEY = 'admin_sidebar_collapsed';
+            const sidebar = document.getElementById('adminSidebar');
+            const toggleBtn = document.getElementById('sidebarToggle');
+            const toggleIcon = document.getElementById('sidebarToggleIcon');
+            const mainContent = document.querySelector('.main-content');
+
+            // Load saved state from localStorage
+            function loadSidebarState() {
+                const isCollapsed = localStorage.getItem(SIDEBAR_STORAGE_KEY) === 'true';
+                if (isCollapsed) {
+                    sidebar.classList.add('collapsed');
+                    updateToggleIcon(true);
+                }
+            }
+
+            // Save state to localStorage
+            function saveSidebarState(isCollapsed) {
+                localStorage.setItem(SIDEBAR_STORAGE_KEY, isCollapsed.toString());
+            }
+
+            // Update toggle icon
+            function updateToggleIcon(isCollapsed) {
+                if (isCollapsed) {
+                    toggleIcon.classList.remove('fa-bars');
+                    toggleIcon.classList.add('fa-chevron-right');
+                } else {
+                    toggleIcon.classList.remove('fa-chevron-right');
+                    toggleIcon.classList.add('fa-bars');
+                }
+            }
+
+            // Toggle sidebar
+            function toggleSidebar() {
+                const isCollapsed = sidebar.classList.toggle('collapsed');
+                updateToggleIcon(isCollapsed);
+                saveSidebarState(isCollapsed);
+                
+                // Update main content margin
+                if (mainContent) {
+                    if (isCollapsed) {
+                        mainContent.style.marginLeft = 'var(--sidebar-width-collapsed)';
+                        mainContent.style.width = 'calc(100vw - var(--sidebar-width-collapsed))';
+                        mainContent.style.maxWidth = 'calc(100vw - var(--sidebar-width-collapsed))';
+                    } else {
+                        mainContent.style.marginLeft = 'var(--sidebar-width)';
+                        mainContent.style.width = 'calc(100vw - var(--sidebar-width))';
+                        mainContent.style.maxWidth = 'calc(100vw - var(--sidebar-width))';
+                    }
+                }
+            }
+            
+            // Update main content on load if sidebar is collapsed
+            function updateMainContentOnLoad() {
+                if (sidebar && mainContent) {
+                    const isCollapsed = sidebar.classList.contains('collapsed');
+                    if (isCollapsed) {
+                        mainContent.style.marginLeft = 'var(--sidebar-width-collapsed)';
+                        mainContent.style.width = 'calc(100vw - var(--sidebar-width-collapsed))';
+                        mainContent.style.maxWidth = 'calc(100vw - var(--sidebar-width-collapsed))';
+                    }
+                }
+            }
+
+            // Initialize
+            if (toggleBtn && sidebar) {
+                loadSidebarState();
+                updateMainContentOnLoad();
+                toggleBtn.addEventListener('click', toggleSidebar);
+            }
+
+            // Add title attributes and classes to all sidebar links for tooltips when collapsed
+            document.addEventListener('DOMContentLoaded', function() {
+                if (!sidebar) return;
+                
+                // Process all navigation links
+                const navLinks = sidebar.querySelectorAll('nav a');
+                navLinks.forEach(link => {
+                    if (!link.classList.contains('sidebar-link')) {
+                        link.classList.add('sidebar-link');
+                    }
+                    
+                    // Find text content (skip badges)
+                    const textElement = link.querySelector('span:not(.badge)');
+                    if (textElement && !link.getAttribute('title')) {
+                        link.setAttribute('title', textElement.textContent.trim());
+                    }
+                    
+                    // Ensure icon has proper class
+                    const icon = link.querySelector('i');
+                    if (icon && !icon.classList.contains('sidebar-link-icon')) {
+                        icon.classList.add('sidebar-link-icon');
+                        if (!icon.style.width) {
+                            icon.style.width = '20px';
+                            icon.style.flexShrink = '0';
+                        }
+                        // Remove me-3 class and add margin via style
+                        icon.classList.remove('me-3');
+                        if (!icon.style.marginRight) {
+                            icon.style.marginRight = '0.75rem';
+                        }
+                    }
+                    
+                    // Ensure text span has proper class
+                    if (textElement && !textElement.classList.contains('sidebar-link-text')) {
+                        textElement.classList.add('sidebar-link-text');
+                        if (!textElement.style.fontWeight) {
+                            textElement.style.fontWeight = '500';
+                        }
+                        if (!textElement.style.whiteSpace) {
+                            textElement.style.whiteSpace = 'nowrap';
+                            textElement.style.overflow = 'hidden';
+                            textElement.style.textOverflow = 'ellipsis';
+                        }
+                    }
+                });
+                
+                // Process accordion buttons
+                const accordionButtons = sidebar.querySelectorAll('.accordion-button');
+                accordionButtons.forEach(button => {
+                    const textElement = button.querySelector('span:not(.badge)');
+                    if (textElement && !button.getAttribute('title')) {
+                        button.setAttribute('title', textElement.textContent.trim());
+                    }
+                });
+                
+                // Ensure logout button has proper structure
+                const logoutBtn = sidebar.querySelector('.sidebar-logout-btn');
+                if (logoutBtn) {
+                    // Logout button already has title attribute, but ensure icon has proper class
+                    const logoutIcon = logoutBtn.querySelector('.sidebar-logout-icon');
+                    if (logoutIcon) {
+                        logoutIcon.style.transition = 'margin 0.3s ease';
+                    }
+                }
+            });
+        })();
+    </script>
     
     {{-- Remove any stray large SVG arrows that might be covering the page --}}
     <script>
