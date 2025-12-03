@@ -7,12 +7,15 @@ use App\Http\Resources\SubscriptionResource;
 use App\Models\Subscription;
 use App\Models\Plan;
 use App\Models\Bill;
+use App\Models\PaymentMethod;
+use App\Models\User;
 use App\Services\Payment\PaymentManager;
 use Illuminate\Http\Request;
 use App\Traits\DetectsRegion;
 use App\Traits\AddsCorsHeaders;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\DB;
+use Barryvdh\DomPDF\Facade\Pdf;
 
 class BillApiController extends Controller
 {
@@ -80,14 +83,31 @@ class BillApiController extends Controller
         $user   = $request->user();
         $region = $this->getRegion($request);
 
+        // Get pagination parameters
+        $perPage = $request->integer('per_page', 10);
+        $page = $request->integer('page', 1);
+
+        // Validate per_page (max 100 to prevent performance issues)
+        $perPage = min($perPage, 100);
+        $perPage = max($perPage, 1);
+
         $subscriptions = Subscription::with('plan')
             ->where('user_id', $user->id)
             ->whereHas('plan', fn($q) => $q->where('region', $region))
             ->orderByDesc('start_date')
-            ->get();
+            ->paginate($perPage, ['*'], 'page', $page);
 
+        // Return paginated response with history array and meta information
         return response()->json([
-            'history' => SubscriptionResource::collection($subscriptions),
+            'history' => SubscriptionResource::collection($subscriptions->items()),
+            'meta' => [
+                'current_page' => $subscriptions->currentPage(),
+                'last_page' => $subscriptions->lastPage(),
+                'per_page' => $subscriptions->perPage(),
+                'total' => $subscriptions->total(),
+                'from' => $subscriptions->firstItem(),
+                'to' => $subscriptions->lastItem(),
+            ],
         ]);
     }
 
@@ -172,15 +192,33 @@ class BillApiController extends Controller
         $user = $request->user();
         $region = $this->getRegion($request);
 
-        // Return subscription history as invoices
-        $subscriptions = Subscription::with('plan')
+        // Get pagination parameters
+        $perPage = $request->integer('per_page', 10);
+        $page = $request->integer('page', 1);
+
+        // Validate per_page (max 100 to prevent performance issues)
+        $perPage = min($perPage, 100);
+        $perPage = max($perPage, 1);
+
+        // Get bills with subscriptions and plans, filtered by region
+        $bills = Bill::with(['subscription.plan', 'payment'])
             ->where('user_id', $user->id)
-            ->whereHas('plan', fn($q) => $q->where('region', $region))
-            ->orderByDesc('start_date')
-            ->get()
-            ->map(function ($subscription) {
+            ->whereHas('subscription.plan', fn($q) => $q->where('region', $region))
+            ->orderByDesc('created_at')
+            ->paginate($perPage, ['*'], 'page', $page);
+
+        // If no bills exist, fall back to subscriptions for backward compatibility
+        if ($bills->isEmpty()) {
+            $subscriptions = Subscription::with('plan')
+                ->where('user_id', $user->id)
+                ->whereHas('plan', fn($q) => $q->where('region', $region))
+                ->orderByDesc('start_date')
+                ->paginate($perPage, ['*'], 'page', $page);
+
+            $invoices = $subscriptions->map(function ($subscription) {
                 return [
                     'id' => $subscription->id,
+                    'bill_id' => null,
                     'invoice_number' => 'INV-' . str_pad($subscription->id, 8, '0', STR_PAD_LEFT),
                     'plan_name' => $subscription->plan->name,
                     'amount' => $subscription->plan->monthly_price,
@@ -192,7 +230,53 @@ class BillApiController extends Controller
                 ];
             });
 
-        return response()->json(['invoices' => $subscriptions]);
+            return response()->json([
+                'invoices' => $invoices,
+                'meta' => [
+                    'current_page' => $subscriptions->currentPage(),
+                    'last_page' => $subscriptions->lastPage(),
+                    'per_page' => $subscriptions->perPage(),
+                    'total' => $subscriptions->total(),
+                    'from' => $subscriptions->firstItem(),
+                    'to' => $subscriptions->lastItem(),
+                ],
+            ]);
+        }
+
+        // Map bills to invoice format
+        $invoices = $bills->map(function ($bill) {
+            $subscription = $bill->subscription;
+            $plan = $subscription?->plan;
+            
+            return [
+                'id' => $bill->id,
+                'bill_id' => $bill->id,
+                'subscription_id' => $bill->subscription_id,
+                'invoice_number' => 'INV-' . str_pad($bill->id, 8, '0', STR_PAD_LEFT),
+                'plan_name' => $plan?->name ?? 'N/A',
+                'amount' => $bill->amount,
+                'currency' => $bill->currency,
+                'status' => $bill->status,
+                'payment_status' => $bill->payment?->status ?? 'unknown',
+                'due_date' => $bill->due_date?->toIso8601String(),
+                'paid_at' => $bill->paid_at?->toIso8601String(),
+                'period_start' => $subscription?->start_date?->toIso8601String(),
+                'period_end' => $subscription?->end_date?->toIso8601String(),
+                'created_at' => $bill->created_at->toIso8601String(),
+            ];
+        });
+
+        return response()->json([
+            'invoices' => $invoices,
+            'meta' => [
+                'current_page' => $bills->currentPage(),
+                'last_page' => $bills->lastPage(),
+                'per_page' => $bills->perPage(),
+                'total' => $bills->total(),
+                'from' => $bills->firstItem(),
+                'to' => $bills->lastItem(),
+            ],
+        ]);
     }
 
     /**
@@ -203,38 +287,168 @@ class BillApiController extends Controller
         $user = $request->user();
         $region = $this->getRegion($request);
 
-        $subscription = Subscription::with('plan')
+        // Try to find bill first
+        $bill = Bill::with(['subscription.plan', 'payment'])
             ->where('id', $id)
             ->where('user_id', $user->id)
-            ->whereHas('plan', fn($q) => $q->where('region', $region))
-            ->firstOrFail();
-
-        // Find associated payment if exists
-        $payment = \App\Models\Payment::where('user_id', $user->id)
-            ->whereJsonContains('metadata->subscription_id', $subscription->id)
-            ->orWhere('reference', 'like', "%{$subscription->id}%")
+            ->whereHas('subscription.plan', fn($q) => $q->where('region', $region))
             ->first();
 
+        // Fall back to subscription for backward compatibility
+        if (!$bill) {
+            $subscription = Subscription::with('plan')
+                ->where('id', $id)
+                ->where('user_id', $user->id)
+                ->whereHas('plan', fn($q) => $q->where('region', $region))
+                ->firstOrFail();
+
+            // Find associated payment if exists
+            $payment = \App\Models\Payment::where('user_id', $user->id)
+                ->whereJsonContains('metadata->subscription_id', $subscription->id)
+                ->orWhere('reference', 'like', "%{$subscription->id}%")
+                ->first();
+
+            return response()->json([
+                'id' => $subscription->id,
+                'bill_id' => null,
+                'invoice_number' => 'INV-' . str_pad($subscription->id, 8, '0', STR_PAD_LEFT),
+                'plan_name' => $subscription->plan->name,
+                'amount' => $subscription->plan->monthly_price,
+                'currency' => $subscription->plan->currency ?? 'USD',
+                'status' => $subscription->is_active ? 'paid' : 'cancelled',
+                'payment_status' => $payment?->status ?? 'unknown',
+                'period_start' => $subscription->start_date->toIso8601String(),
+                'period_end' => $subscription->end_date->toIso8601String(),
+                'line_items' => [
+                    [
+                        'description' => "Subscription to {$subscription->plan->name}",
+                        'quantity' => 1,
+                        'unit_price' => $subscription->plan->monthly_price,
+                        'total' => $subscription->plan->monthly_price,
+                    ],
+                ],
+                'created_at' => $subscription->created_at->toIso8601String(),
+            ]);
+        }
+
+        $subscription = $bill->subscription;
+        $plan = $subscription?->plan;
+
         return response()->json([
-            'id' => $subscription->id,
-            'invoice_number' => 'INV-' . str_pad($subscription->id, 8, '0', STR_PAD_LEFT),
-            'plan_name' => $subscription->plan->name,
-            'amount' => $subscription->plan->monthly_price,
-            'currency' => $subscription->plan->currency ?? 'USD',
-            'status' => $subscription->is_active ? 'paid' : 'cancelled',
-            'payment_status' => $payment?->status ?? 'unknown',
-            'period_start' => $subscription->start_date->toIso8601String(),
-            'period_end' => $subscription->end_date->toIso8601String(),
+            'id' => $bill->id,
+            'bill_id' => $bill->id,
+            'subscription_id' => $bill->subscription_id,
+            'invoice_number' => 'INV-' . str_pad($bill->id, 8, '0', STR_PAD_LEFT),
+            'plan_name' => $plan?->name ?? 'N/A',
+            'amount' => $bill->amount,
+            'currency' => $bill->currency,
+            'status' => $bill->status,
+            'payment_status' => $bill->payment?->status ?? 'unknown',
+            'due_date' => $bill->due_date?->toIso8601String(),
+            'paid_at' => $bill->paid_at?->toIso8601String(),
+            'period_start' => $subscription?->start_date?->toIso8601String(),
+            'period_end' => $subscription?->end_date?->toIso8601String(),
             'line_items' => [
                 [
-                    'description' => "Subscription to {$subscription->plan->name}",
+                    'description' => $bill->description ?? "Subscription to {$plan?->name}",
                     'quantity' => 1,
-                    'unit_price' => $subscription->plan->monthly_price,
-                    'total' => $subscription->plan->monthly_price,
+                    'unit_price' => $bill->amount,
+                    'total' => $bill->amount,
                 ],
             ],
-            'created_at' => $subscription->created_at->toIso8601String(),
+            'created_at' => $bill->created_at->toIso8601String(),
         ]);
+    }
+
+    /**
+     * Download invoice as PDF
+     */
+    public function downloadInvoice(Request $request, $id)
+    {
+        $user = $request->user();
+        $region = $this->getRegion($request);
+
+        // Try to find bill first
+        $bill = Bill::with(['subscription.plan', 'payment'])
+            ->where('id', $id)
+            ->where('user_id', $user->id)
+            ->whereHas('subscription.plan', fn($q) => $q->where('region', $region))
+            ->first();
+
+        // Fall back to subscription for backward compatibility
+        if (!$bill) {
+            $subscription = Subscription::with('plan')
+                ->where('id', $id)
+                ->where('user_id', $user->id)
+                ->whereHas('plan', fn($q) => $q->where('region', $region))
+                ->firstOrFail();
+
+            // Find associated payment if exists
+            $payment = \App\Models\Payment::where('user_id', $user->id)
+                ->whereJsonContains('metadata->subscription_id', $subscription->id)
+                ->orWhere('reference', 'like', "%{$subscription->id}%")
+                ->first();
+
+            $invoice = [
+                'id' => $subscription->id,
+                'bill_id' => null,
+                'invoice_number' => 'INV-' . str_pad($subscription->id, 8, '0', STR_PAD_LEFT),
+                'plan_name' => $subscription->plan->name,
+                'amount' => $subscription->plan->monthly_price,
+                'currency' => $subscription->plan->currency ?? 'USD',
+                'status' => $subscription->is_active ? 'paid' : 'cancelled',
+                'payment_status' => $payment?->status ?? 'unknown',
+                'period_start' => $subscription->start_date->toIso8601String(),
+                'period_end' => $subscription->end_date->toIso8601String(),
+                'line_items' => [
+                    [
+                        'description' => "Subscription to {$subscription->plan->name}",
+                        'quantity' => 1,
+                        'unit_price' => $subscription->plan->monthly_price,
+                        'total' => $subscription->plan->monthly_price,
+                    ],
+                ],
+                'created_at' => $subscription->created_at->toIso8601String(),
+            ];
+        } else {
+            $subscription = $bill->subscription;
+            $plan = $subscription?->plan;
+
+            $invoice = [
+                'id' => $bill->id,
+                'bill_id' => $bill->id,
+                'subscription_id' => $bill->subscription_id,
+                'invoice_number' => 'INV-' . str_pad($bill->id, 8, '0', STR_PAD_LEFT),
+                'plan_name' => $plan?->name ?? 'N/A',
+                'amount' => $bill->amount,
+                'currency' => $bill->currency,
+                'status' => $bill->status,
+                'payment_status' => $bill->payment?->status ?? 'unknown',
+                'due_date' => $bill->due_date?->toIso8601String(),
+                'paid_at' => $bill->paid_at?->toIso8601String(),
+                'period_start' => $subscription?->start_date?->toIso8601String(),
+                'period_end' => $subscription?->end_date?->toIso8601String(),
+                'line_items' => [
+                    [
+                        'description' => $bill->description ?? "Subscription to {$plan?->name}",
+                        'quantity' => 1,
+                        'unit_price' => $bill->amount,
+                        'total' => $bill->amount,
+                    ],
+                ],
+                'created_at' => $bill->created_at->toIso8601String(),
+            ];
+        }
+
+        // Generate PDF
+        $pdf = Pdf::loadView('invoices.invoice-pdf', [
+            'invoice' => $invoice,
+            'user' => $user,
+        ])->setPaper('a4', 'portrait');
+
+        $filename = 'invoice-' . $invoice['invoice_number'] . '.pdf';
+
+        return $pdf->download($filename);
     }
 
     /**
@@ -286,14 +500,23 @@ class BillApiController extends Controller
     public function paymentMethods(Request $request)
     {
         $user = $request->user();
+        $region = $this->getRegion($request);
         
-        // For now, return payment methods from subscription metadata
-        // In the future, this could be a separate payment_methods table
+        // Get available payment methods for this region
+        $availableMethods = PaymentMethod::forRegion($region)->get()->map(function ($method) {
+            return [
+                'key' => $method->key,
+                'name' => $method->name,
+                'description' => $method->description,
+            ];
+        });
+        
+        // Get user's saved payment methods from subscription metadata
         $subscriptions = Subscription::where('user_id', $user->id)
             ->whereNotNull('metadata')
             ->get();
 
-        $paymentMethods = $subscriptions->map(function ($subscription) {
+        $savedPaymentMethods = $subscriptions->map(function ($subscription) {
             $metadata = $subscription->metadata ?? [];
             $method = $metadata['payment_method'] ?? null;
             
@@ -308,7 +531,10 @@ class BillApiController extends Controller
             return null;
         })->filter()->unique('type')->values();
 
-        return response()->json(['payment_methods' => $paymentMethods]);
+        return response()->json([
+            'available_methods' => $availableMethods,
+            'saved_methods' => $savedPaymentMethods,
+        ]);
     }
 
     /**
@@ -316,13 +542,23 @@ class BillApiController extends Controller
      */
     public function addPaymentMethod(Request $request)
     {
-        $request->validate([
-            'payment_method' => 'required|string|in:stripe,chapa,telebirr',
-            'payment_details' => 'sometimes|array',
-        ]);
-
         $user = $request->user();
         $region = $this->getRegion($request);
+        
+        // Get available payment methods for this region
+        $availableMethods = PaymentMethod::forRegion($region)->pluck('key')->toArray();
+        
+        $request->validate([
+            'payment_method' => ['required', 'string', function ($attribute, $value, $fail) use ($availableMethods, $region) {
+                $paymentMethod = PaymentMethod::where('key', $value)->first();
+                if (!$paymentMethod) {
+                    $fail("Payment method '{$value}' not found.");
+                } elseif (!$paymentMethod->isEnabledForRegion($region)) {
+                    $fail("Payment method '{$value}' is not available for your region. Available methods: " . implode(', ', $availableMethods ?: ['none']));
+                }
+            }],
+            'payment_details' => 'sometimes|array',
+        ]);
 
         $subscription = Subscription::where('user_id', $user->id)
             ->whereHas('plan', fn($q) => $q->where('region', $region))
@@ -586,12 +822,45 @@ class BillApiController extends Controller
         $method = $paymentMethod 
             ?? $bill->metadata['payment_method'] 
             ?? $subscription->metadata['payment_method'] 
-            ?? ($region === 'intl' ? 'stripe' : 'chapa');
+            ?? null;
 
-        // Validate payment method
-        if (!in_array($method, ['stripe', 'chapa', 'telebirr'])) {
+        // Auto-select payment method if not provided
+        if (!$method) {
+            $enabledMethods = PaymentMethod::forRegion($region)->get();
+            if ($enabledMethods->isEmpty()) {
+                $response = response()->json([
+                    'message' => 'No payment methods are available for your region. Please contact support.',
+                    'error_code' => 'NO_PAYMENT_METHODS_AVAILABLE',
+                ], 422);
+                return $this->addCorsHeaders($response, $request);
+            }
+            
+            // Prefer stripe for intl, chapa for local, otherwise use first available
+            if ($region === 'intl') {
+                $preferredMethod = $enabledMethods->firstWhere('key', 'stripe') ?? $enabledMethods->first();
+            } else {
+                $preferredMethod = $enabledMethods->firstWhere('key', 'chapa') ?? $enabledMethods->first();
+            }
+            $method = $preferredMethod->key;
+        }
+
+        // Validate payment method is enabled for this region
+        $paymentMethodModel = PaymentMethod::where('key', $method)->first();
+        
+        if (!$paymentMethodModel) {
             $response = response()->json([
-                'message' => 'Invalid payment method.',
+                'message' => 'Payment method not found. Please use a valid payment method.',
+                'error_code' => 'PAYMENT_METHOD_NOT_FOUND',
+            ], 422);
+            return $this->addCorsHeaders($response, $request);
+        }
+        
+        if (!$paymentMethodModel->isEnabledForRegion($region)) {
+            $availableMethods = PaymentMethod::forRegion($region)->pluck('key')->toArray();
+            $response = response()->json([
+                'message' => "Payment method '{$method}' is not available for your region. Available methods: " . implode(', ', $availableMethods ?: ['none']),
+                'error_code' => 'PAYMENT_METHOD_DISABLED',
+                'available_methods' => $availableMethods,
             ], 422);
             return $this->addCorsHeaders($response, $request);
         }

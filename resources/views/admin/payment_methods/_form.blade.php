@@ -20,17 +20,33 @@
         <textarea name="description" class="form-control">{{ old('description', $paymentMethod->description ?? '') }}</textarea>
     </div>
 
-    <div class="mb-3">
-        <label class="form-label">Configuration (JSON)</label>
-        <textarea name="config" class="form-control" rows="5">{{ old('config', isset($paymentMethod) ? json_encode($paymentMethod->config, JSON_PRETTY_PRINT) : '{}') }}</textarea>
-        <div class="form-text">Enter key-value pairs like {"api_key":"...","webhook":"..."}</div>
-    </div>
-
-    <div class="form-check mb-4">
+    <div class="form-check mb-3">
         <input type="hidden" name="is_enabled" value="0">
         <input class="form-check-input" type="checkbox" name="is_enabled" value="1" id="is_enabled"
             {{ old('is_enabled', $paymentMethod->is_enabled ?? false) ? 'checked' : '' }}>
         <label class="form-check-label" for="is_enabled">Enable Payment Method</label>
+    </div>
+
+    <div class="mb-4">
+        <label class="form-label fw-bold">Enable for Regions</label>
+        <div class="form-text mb-2">Select which regions this payment method should be available for:</div>
+        <div class="form-check">
+            <input class="form-check-input" type="checkbox" name="regions[]" value="local" id="region_local"
+                {{ in_array('local', old('regions', $paymentMethod->regions ?? [])) ? 'checked' : '' }}>
+            <label class="form-check-label" for="region_local">
+                <strong>Local</strong> (Ethiopia - ETB currency, Chapa)
+            </label>
+        </div>
+        <div class="form-check">
+            <input class="form-check-input" type="checkbox" name="regions[]" value="intl" id="region_intl"
+                {{ in_array('intl', old('regions', $paymentMethod->regions ?? [])) ? 'checked' : '' }}>
+            <label class="form-check-label" for="region_intl">
+                <strong>International</strong> (USD currency, Stripe)
+            </label>
+        </div>
+        <div class="form-text mt-2">
+            <small class="text-muted">Note: Payment method must be enabled above for region selection to take effect.</small>
+        </div>
     </div>
 
     <button class="btn btn-success w-100">

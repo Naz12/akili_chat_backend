@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use Carbon\Carbon;
 use App\Models\Plan;
 use App\Models\Subscription;
+use App\Models\PaymentMethod;
 use App\Services\Payment\PaymentManager;
 use Illuminate\Http\Request;
 use App\Traits\DetectsRegion;
@@ -32,7 +33,7 @@ class SubscriptionApiController extends Controller
     {
         $request->validate([
             'plan_id' => 'required|exists:plans,id',
-            'payment_method' => 'nullable|string|in:stripe,chapa,telebirr', // Optional - will be auto-selected based on region
+            'payment_method' => 'nullable|string', // Optional - will be auto-selected based on region, validated against enabled methods
         ]);
     
         $user   = $request->user();
@@ -124,26 +125,49 @@ class SubscriptionApiController extends Controller
         $paymentMethod = $request->payment_method;
         
         if (!$paymentMethod) {
-            // Auto-select based on user's region: Stripe for intl, Chapa for local
-            if ($userRegion === 'intl') {
-                $paymentMethod = 'stripe';
-                Log::info('Auto-selected Stripe for international user', [
-                    'user_id' => $user->id,
-                    'region' => $userRegion,
-                ]);
-            } else {
-                $paymentMethod = 'chapa';
-                Log::info('Auto-selected Chapa for local user', [
-                    'user_id' => $user->id,
-                    'region' => $userRegion,
-                ]);
+            // Auto-select based on user's region from enabled payment methods
+            $enabledMethods = PaymentMethod::forRegion($userRegion)->get();
+            
+            if ($enabledMethods->isEmpty()) {
+                $response = response()->json([
+                    'message' => 'No payment methods are available for your region. Please contact support.',
+                    'error_code' => 'NO_PAYMENT_METHODS_AVAILABLE',
+                ], 422);
+                return $this->addCorsHeaders($response, $request);
             }
+            
+            // Prefer stripe for intl, chapa for local, otherwise use first available
+            if ($userRegion === 'intl') {
+                $preferredMethod = $enabledMethods->firstWhere('key', 'stripe') ?? $enabledMethods->first();
+            } else {
+                $preferredMethod = $enabledMethods->firstWhere('key', 'chapa') ?? $enabledMethods->first();
+            }
+            
+            $paymentMethod = $preferredMethod->key;
+            Log::info('Auto-selected payment method for user', [
+                'user_id' => $user->id,
+                'region' => $userRegion,
+                'payment_method' => $paymentMethod,
+            ]);
         }
         
-        // Validate payment method is supported
-        if (!in_array($paymentMethod, ['stripe', 'chapa', 'telebirr'])) {
+        // Validate payment method is enabled for this region
+        $paymentMethodModel = PaymentMethod::where('key', $paymentMethod)->first();
+        
+        if (!$paymentMethodModel) {
             $response = response()->json([
-                'message' => 'Unsupported payment method. Use "stripe" for international or "chapa" for local.',
+                'message' => 'Payment method not found. Please use a valid payment method.',
+                'error_code' => 'PAYMENT_METHOD_NOT_FOUND',
+            ], 422);
+            return $this->addCorsHeaders($response, $request);
+        }
+        
+        if (!$paymentMethodModel->isEnabledForRegion($userRegion)) {
+            $availableMethods = PaymentMethod::forRegion($userRegion)->pluck('key')->toArray();
+            $response = response()->json([
+                'message' => "Payment method '{$paymentMethod}' is not available for your region. Available methods: " . implode(', ', $availableMethods ?: ['none']),
+                'error_code' => 'PAYMENT_METHOD_DISABLED',
+                'available_methods' => $availableMethods,
             ], 422);
             return $this->addCorsHeaders($response, $request);
         }

@@ -29,13 +29,14 @@ class PaymentMethodController extends Controller
             'key' => 'required|string|unique:payment_methods,key',
             'description' => 'nullable|string',
             'is_enabled' => 'sometimes|boolean',
-            'config' => 'nullable|array',
+            'regions' => 'nullable|array',
+            'regions.*' => 'in:local,intl',
         ]);
 
         PaymentMethod::create([
             ...$validated,
             'is_enabled' => $request->boolean('is_enabled'),
-            'config' => $request->config ?? [],
+            'regions' => $request->regions ?? [],
         ]);
 
         return redirect()->route('admin.payment-methods.index')->with('success', 'Payment method added.');
@@ -53,13 +54,14 @@ class PaymentMethodController extends Controller
             'key' => 'required|string|unique:payment_methods,key,' . $paymentMethod->id,
             'description' => 'nullable|string',
             'is_enabled' => 'sometimes|boolean',
-            'config' => 'nullable|array',
+            'regions' => 'nullable|array',
+            'regions.*' => 'in:local,intl',
         ]);
 
         $paymentMethod->update([
             ...$validated,
             'is_enabled' => $request->boolean('is_enabled'),
-            'config' => $request->config ?? [],
+            'regions' => $request->regions ?? [],
         ]);
 
         return redirect()->route('admin.payment-methods.index')->with('success', 'Updated successfully.');
@@ -107,13 +109,12 @@ class PaymentMethodController extends Controller
                     'Name' => $method->name,
                     'Key' => $method->key,
                     'Status' => $method->is_enabled ? 'Enabled' : 'Disabled',
-                    'Config' => json_encode($method->config ?? []),
                     'Description' => $method->description ?? '-',
                     'Created' => $method->created_at->format('Y-m-d'),
                 ];
             });
 
-            $headers = ['ID', 'Name', 'Key', 'Status', 'Config', 'Description', 'Created'];
+            $headers = ['ID', 'Name', 'Key', 'Status', 'Description', 'Created'];
             $filename = 'payment_methods_' . now()->format('Y-m-d_H-i-s');
 
             if ($format === 'pdf') {

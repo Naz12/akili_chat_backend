@@ -118,6 +118,7 @@ Route::prefix('v1')->group(function () {
                     Route::post('/billing/toggle-renew', [BillApiController::class, 'toggleAutoRenew']);
                     Route::get('/billing/invoices', [BillApiController::class, 'invoices']);
                     Route::get('/billing/invoices/{id}', [BillApiController::class, 'invoice']);
+                    Route::get('/billing/invoices/{id}/download', [BillApiController::class, 'downloadInvoice']);
                     Route::get('/billing/upcoming-charges', [BillApiController::class, 'upcomingCharges']);
                     Route::get('/billing/payment-methods', [BillApiController::class, 'paymentMethods']);
                     Route::post('/billing/payment-methods', [BillApiController::class, 'addPaymentMethod']);
@@ -135,6 +136,9 @@ Route::prefix('v1')->group(function () {
 
                     // 💰 Region-based Subscription
                     Route::post('/regional-subscribe', [PaymentMethodApiController::class, 'subscribe']);
+                    
+                    // 💰 Available Payment Methods (for frontend selection)
+                    Route::get('/payment-methods/available', [PaymentMethodApiController::class, 'index']);
                     Route::post('/payment/telebirr/callback', [SubscriptionApiController::class, 'handleTelebirrCallback'])
                         ->name("api.payment.telebirr.callback.{$prefix}");
                     

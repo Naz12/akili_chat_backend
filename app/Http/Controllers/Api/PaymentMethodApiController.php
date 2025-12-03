@@ -5,16 +5,29 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use App\Models\PaymentMethod;
+use App\Traits\DetectsRegion;
 
 class PaymentMethodApiController extends Controller
 {
+    use DetectsRegion;
+
     /**
-     * Return a list of enabled payment methods with public config.
+     * Return a list of enabled payment methods for the current region.
      */
-    public function index()
+    public function index(Request $request)
     {
-        $methods = PaymentMethod::where('is_enabled', true)
-            ->orderBy('sort_order', 'asc') // optional: to control display order
+        // Get region from route parameter or URL segment
+        $region = $request->route('region') ?? $request->segment(3);
+        
+        if (!in_array($region, ['local', 'intl'])) {
+            return response()->json([
+                'error' => 'Invalid region. Use "local" or "intl".',
+                'payment_methods' => [],
+            ], 400);
+        }
+
+        $methods = PaymentMethod::forRegion($region)
+            ->orderBy('name', 'asc')
             ->get();
 
         $response = $methods->map(function ($method) {
@@ -24,11 +37,11 @@ class PaymentMethodApiController extends Controller
                 'key' => $method->key,
                 'logo_url' => $method->logo_url ?? null,
                 'description' => $method->description,
-                'metadata' => $method->config['public'] ?? [],
             ];
         });
 
         return response()->json([
+            'region' => $region,
             'payment_methods' => $response,
         ]);
     }
