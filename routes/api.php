@@ -117,8 +117,8 @@ Route::prefix('v1')->group(function () {
                     Route::get('/billing/usage', [BillApiController::class, 'usage']);
                     Route::post('/billing/toggle-renew', [BillApiController::class, 'toggleAutoRenew']);
                     Route::get('/billing/invoices', [BillApiController::class, 'invoices']);
-                    Route::get('/billing/invoices/{id}', [BillApiController::class, 'invoice']);
                     Route::get('/billing/invoices/{id}/download', [BillApiController::class, 'downloadInvoice']);
+                    Route::get('/billing/invoices/{id}', [BillApiController::class, 'invoice']);
                     Route::get('/billing/upcoming-charges', [BillApiController::class, 'upcomingCharges']);
                     Route::get('/billing/payment-methods', [BillApiController::class, 'paymentMethods']);
                     Route::post('/billing/payment-methods', [BillApiController::class, 'addPaymentMethod']);

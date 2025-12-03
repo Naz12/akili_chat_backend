@@ -200,55 +200,31 @@ class BillApiController extends Controller
         $perPage = min($perPage, 100);
         $perPage = max($perPage, 1);
 
-        // Get bills with subscriptions and plans, filtered by region
+        // Get all bills for this user and region
         $bills = Bill::with(['subscription.plan', 'payment'])
             ->where('user_id', $user->id)
             ->whereHas('subscription.plan', fn($q) => $q->where('region', $region))
-            ->orderByDesc('created_at')
-            ->paginate($perPage, ['*'], 'page', $page);
+            ->get();
 
-        // If no bills exist, fall back to subscriptions for backward compatibility
-        if ($bills->isEmpty()) {
-            $subscriptions = Subscription::with('plan')
-                ->where('user_id', $user->id)
-                ->whereHas('plan', fn($q) => $q->where('region', $region))
-                ->orderByDesc('start_date')
-                ->paginate($perPage, ['*'], 'page', $page);
+        // Get subscription IDs that already have bills (to avoid duplicates)
+        $subscriptionIdsWithBills = $bills->pluck('subscription_id')->filter()->toArray();
 
-            $invoices = $subscriptions->map(function ($subscription) {
-                return [
-                    'id' => $subscription->id,
-                    'bill_id' => null,
-                    'invoice_number' => 'INV-' . str_pad($subscription->id, 8, '0', STR_PAD_LEFT),
-                    'plan_name' => $subscription->plan->name,
-                    'amount' => $subscription->plan->monthly_price,
-                    'currency' => $subscription->plan->currency ?? 'USD',
-                    'status' => $subscription->is_active ? 'paid' : 'cancelled',
-                    'period_start' => $subscription->start_date->toIso8601String(),
-                    'period_end' => $subscription->end_date->toIso8601String(),
-                    'created_at' => $subscription->created_at->toIso8601String(),
-                ];
-            });
+        // Get all subscriptions for this user and region that don't have bills
+        $subscriptions = Subscription::with('plan')
+            ->where('user_id', $user->id)
+            ->whereHas('plan', fn($q) => $q->where('region', $region))
+            ->whereNotIn('id', $subscriptionIdsWithBills)
+            ->get();
 
-            return response()->json([
-                'invoices' => $invoices,
-                'meta' => [
-                    'current_page' => $subscriptions->currentPage(),
-                    'last_page' => $subscriptions->lastPage(),
-                    'per_page' => $subscriptions->perPage(),
-                    'total' => $subscriptions->total(),
-                    'from' => $subscriptions->firstItem(),
-                    'to' => $subscriptions->lastItem(),
-                ],
-            ]);
-        }
+        // Combine bills and subscriptions into invoices
+        $allInvoices = collect();
 
-        // Map bills to invoice format
-        $invoices = $bills->map(function ($bill) {
+        // Add bills as invoices
+        foreach ($bills as $bill) {
             $subscription = $bill->subscription;
             $plan = $subscription?->plan;
             
-            return [
+            $allInvoices->push([
                 'id' => $bill->id,
                 'bill_id' => $bill->id,
                 'subscription_id' => $bill->subscription_id,
@@ -263,18 +239,62 @@ class BillApiController extends Controller
                 'period_start' => $subscription?->start_date?->toIso8601String(),
                 'period_end' => $subscription?->end_date?->toIso8601String(),
                 'created_at' => $bill->created_at->toIso8601String(),
-            ];
+                'sort_date' => $bill->created_at->timestamp,
+            ]);
+        }
+
+        // Add subscriptions without bills as invoices
+        foreach ($subscriptions as $subscription) {
+            // Find associated payment if exists
+            $payment = \App\Models\Payment::where('user_id', $user->id)
+                ->where(function($q) use ($subscription) {
+                    $q->whereJsonContains('metadata->subscription_id', $subscription->id)
+                      ->orWhere('reference', 'like', "%{$subscription->id}%");
+                })
+                ->orderByDesc('created_at')
+                ->first();
+
+            $allInvoices->push([
+                'id' => $subscription->id,
+                'bill_id' => null,
+                'subscription_id' => $subscription->id,
+                'invoice_number' => 'INV-' . str_pad($subscription->id, 8, '0', STR_PAD_LEFT),
+                'plan_name' => $subscription->plan->name,
+                'amount' => $subscription->plan->monthly_price,
+                'currency' => $subscription->plan->currency ?? 'USD',
+                'status' => $subscription->is_active ? 'paid' : 'cancelled',
+                'payment_status' => $payment?->status ?? 'unknown',
+                'period_start' => $subscription->start_date->toIso8601String(),
+                'period_end' => $subscription->end_date->toIso8601String(),
+                'created_at' => $subscription->created_at->toIso8601String(),
+                'sort_date' => $subscription->created_at->timestamp,
+            ]);
+        }
+
+        // Sort by created_at descending (most recent first)
+        $allInvoices = $allInvoices->sortByDesc('sort_date')->values();
+
+        // Manual pagination
+        $total = $allInvoices->count();
+        $lastPage = (int) ceil($total / $perPage);
+        $offset = ($page - 1) * $perPage;
+        $paginatedInvoices = $allInvoices->slice($offset, $perPage)->values();
+
+        // Remove sort_date from response
+        $invoices = $paginatedInvoices->map(function ($invoice) {
+            unset($invoice['sort_date']);
+            return $invoice;
         });
 
         return response()->json([
             'invoices' => $invoices,
             'meta' => [
-                'current_page' => $bills->currentPage(),
-                'last_page' => $bills->lastPage(),
-                'per_page' => $bills->perPage(),
-                'total' => $bills->total(),
-                'from' => $bills->firstItem(),
-                'to' => $bills->lastItem(),
+                'current_page' => $page,
+                'last_page' => $lastPage,
+                'per_page' => $perPage,
+                'total' => $total,
+                'from' => $total > 0 ? $offset + 1 : null,
+                'to' => $total > 0 ? min($offset + $perPage, $total) : null,
             ],
         ]);
     }
@@ -381,7 +401,15 @@ class BillApiController extends Controller
                 ->where('id', $id)
                 ->where('user_id', $user->id)
                 ->whereHas('plan', fn($q) => $q->where('region', $region))
-                ->firstOrFail();
+                ->first();
+
+            if (!$subscription) {
+                $response = response()->json([
+                    'message' => 'Invoice not found.',
+                    'error_code' => 'INVOICE_NOT_FOUND',
+                ], 404);
+                return $this->addCorsHeaders($response, $request);
+            }
 
             // Find associated payment if exists
             $payment = \App\Models\Payment::where('user_id', $user->id)
@@ -440,15 +468,30 @@ class BillApiController extends Controller
             ];
         }
 
-        // Generate PDF
-        $pdf = Pdf::loadView('invoices.invoice-pdf', [
-            'invoice' => $invoice,
-            'user' => $user,
-        ])->setPaper('a4', 'portrait');
+        try {
+            // Generate PDF
+            $pdf = Pdf::loadView('invoices.invoice-pdf', [
+                'invoice' => $invoice,
+                'user' => $user,
+            ])->setPaper('a4', 'portrait');
 
-        $filename = 'invoice-' . $invoice['invoice_number'] . '.pdf';
+            $filename = 'invoice-' . $invoice['invoice_number'] . '.pdf';
 
-        return $pdf->download($filename);
+            return $pdf->download($filename);
+        } catch (\Exception $e) {
+            Log::error('Failed to generate invoice PDF', [
+                'invoice_id' => $id,
+                'user_id' => $user->id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            $response = response()->json([
+                'message' => 'Failed to generate invoice PDF. Please try again later.',
+                'error_code' => 'PDF_GENERATION_FAILED',
+            ], 500);
+            return $this->addCorsHeaders($response, $request);
+        }
     }
 
     /**
