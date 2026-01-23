@@ -9,7 +9,7 @@ echo "🔄 RESTARTING SOKETI WITH NEW CONFIGURATION"
 echo "============================================"
 echo ""
 
-cd /home/deploy_user_dagi/services/akili_chat_backend
+cd /home/deploy_user_dagi/services/akili/akili_chat_backend
 
 # Check if running as root
 if [ "$EUID" -ne 0 ]; then 

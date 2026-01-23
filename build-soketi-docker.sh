@@ -5,7 +5,7 @@
 
 echo "🔨 Building Soketi Docker image..."
 
-cd /home/deploy_user_dagi/services/akili_chat_backend
+cd /home/deploy_user_dagi/services/akili/akili_chat_backend
 
 # Check if user can run docker, if not use sudo
 if docker ps >/dev/null 2>&1; then

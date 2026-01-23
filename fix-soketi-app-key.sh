@@ -17,7 +17,7 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 SERVICE_FILE="/etc/systemd/system/akili-websocket.service"
-BACKEND_DIR="/home/deploy_user_dagi/services/akili_chat_backend"
+BACKEND_DIR="/home/deploy_user_dagi/services/akili/akili_chat_backend"
 CONFIG_FILE="$BACKEND_DIR/soketi.config.json"
 
 echo "1️⃣ Checking Soketi config file..."

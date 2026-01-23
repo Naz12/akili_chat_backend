@@ -16,7 +16,7 @@ fi
 
 # Step 1: Copy systemd service file
 echo "1️⃣ Copying systemd service file..."
-cp /home/deploy_user_dagi/services/akili_chat_backend/akili-websocket.service /etc/systemd/system/akili-websocket.service
+cp /home/deploy_user_dagi/services/akili/akili_chat_backend/akili-websocket.service /etc/systemd/system/akili-websocket.service
 chmod 644 /etc/systemd/system/akili-websocket.service
 echo "✅ Service file copied"
 
@@ -55,7 +55,7 @@ if nginx -t; then
     echo "✅ Nginx reloaded"
 else
     echo "❌ Nginx configuration has errors!"
-    echo "   Please check: /home/deploy_user_dagi/services/akili_chat_backend/chat.akmicroservice.com.conf"
+    echo "   Please check: /home/deploy_user_dagi/services/akili/akili_chat_backend/chat.akmicroservice.com.conf"
     exit 1
 fi
 
@@ -81,7 +81,7 @@ echo "📝 Next steps:"
 echo "   1. Check service status: sudo systemctl status akili-websocket"
 echo "   2. View logs: sudo tail -f /var/log/akili-websocket.log"
 echo "   3. Test WebSocket: curl http://localhost:6001"
-echo "   4. Clear Laravel config: cd /home/deploy_user_dagi/services/akili_chat_backend && php artisan config:clear"
+echo "   4. Clear Laravel config: cd /home/deploy_user_dagi/services/akili/akili_chat_backend && php artisan config:clear"
 echo ""
 echo "🔗 WebSocket endpoint: wss://chat.akmicroservice.com/app/"
 echo ""

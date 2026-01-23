@@ -5,7 +5,7 @@ echo "FIXING LARAVEL STORAGE PERMISSIONS"
 echo "=========================================="
 echo ""
 
-cd /home/deploy_user_dagi/services/akili_chat_backend
+cd /home/deploy_user_dagi/services/akili/akili_chat_backend
 
 echo "1. Fixing storage directory ownership..."
 sudo chown -R www-data:www-data storage bootstrap/cache

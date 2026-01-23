@@ -10,7 +10,7 @@ sudo cp /etc/nginx/sites-enabled/chat.akmicroservice.com.conf /etc/nginx/sites-e
 
 # Copy new config
 echo "2. Copying new nginx config..."
-sudo cp /home/deploy_user_dagi/services/akili_chat_backend/chat.akmicroservice.com.conf /etc/nginx/sites-enabled/chat.akmicroservice.com.conf
+sudo cp /home/deploy_user_dagi/services/akili/akili_chat_backend/chat.akmicroservice.com.conf /etc/nginx/sites-enabled/chat.akmicroservice.com.conf
 
 # Test nginx
 echo "3. Testing nginx configuration..."
