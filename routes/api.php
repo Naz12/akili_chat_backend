@@ -2,6 +2,7 @@
 
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\AuthApiController;
+use App\Http\Controllers\Api\WorkflowInsightsController;
 use App\Http\Controllers\Api\BillApiController;
 use App\Http\Controllers\Api\PlanApiController;
 use App\Http\Controllers\Api\UserApiController;
@@ -25,15 +26,15 @@ Route::prefix('v1')->group(function () {
     
 
     foreach (['local', 'intl'] as $prefix) {
-        Route::prefix($prefix)->group(function () {
+        Route::prefix($prefix)->group(function () use ($prefix) {
             Route::get('/check-version', [AppVersionApiController::class, 'check']);
 
-            Route::middleware('auth:api')->group(function () {
+            Route::middleware('auth:api')->group(function () use ($prefix) {
                 Route::get('/user', [UserApiController::class, 'profile']);
                 Route::post('/logout', [UserApiController::class, 'logout']);
                 Route::post('/fcm-token', [UserApiController::class, 'storeFcmToken']);
 
-                Route::middleware(['ensure.region.match'])->group(function () {
+                Route::middleware(['ensure.region.match'])->group(function () use ($prefix) {
                     // 🗂️ Plans & Subscriptions
                     Route::get('/plans', [PlanApiController::class, 'index']);
                     Route::post('/subscribe', [SubscriptionApiController::class, 'subscribe']);
@@ -73,7 +74,13 @@ Route::prefix('v1')->group(function () {
                     // 💰 Region-based Subscription
                     Route::post('/regional-subscribe', [PaymentMethodApiController::class, 'subscribe']);
                     Route::post('/payment/telebirr/callback', [SubscriptionApiController::class, 'handleTelebirrCallback'])
-                        ->name('api.payment.telebirr.callback');
+                        ->name("api.payment.telebirr.callback.{$prefix}");
+                    
+                    // 🧠 Workflow Insights & Optimization
+                    Route::prefix('insights')->group(function () {
+                        Route::get('/summary', [WorkflowInsightsController::class, 'summary']);
+                        Route::get('/recommendations', [WorkflowInsightsController::class, 'recommendations']);
+                    });
                 });
             });
         });

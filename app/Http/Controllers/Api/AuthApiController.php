@@ -7,6 +7,7 @@ use Illuminate\Support\Str;
 use Illuminate\Http\Request;
 use Tymon\JWTAuth\Facades\JWTAuth;
 use App\Http\Controllers\Controller;
+use App\Traits\AddsCorsHeaders;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Http;
@@ -16,30 +17,43 @@ use Illuminate\Support\Facades\Log;
 
 class AuthApiController extends Controller
 {
+    use AddsCorsHeaders;
     public function login(Request $request)
     {
-    $credentials = $request->only('email', 'password');
+        try {
+            $credentials = $request->only('email', 'password');
 
-    Log::info('🔐 Login attempt', $credentials);
+            Log::info('🔐 Login attempt', $credentials);
 
-    $user = \App\Models\User::where('email', $request->email)->first();
-    $match = $user ? \Hash::check($request->password, $user->password) : false;
+            $user = \App\Models\User::where('email', $request->email)->first();
+            $match = $user ? \Hash::check($request->password, $user->password) : false;
 
-    Log::info('🧠 Found user?', ['found' => (bool) $user]);
-    Log::info('🔑 Password match?', ['match' => $match]);
-    Log::info('🔐 Attempting JWT login...');
+            Log::info('🧠 Found user?', ['found' => (bool) $user]);
+            Log::info('🔑 Password match?', ['match' => $match]);
+            Log::info('🔐 Attempting JWT login...');
 
-    if (!$token = auth('api')->attempt($credentials)) {
-        Log::warning('❌ JWT login failed');
-        return response()->json(['error' => 'Unauthorized'], 401);
-    }
+            if (!$token = auth('api')->attempt($credentials)) {
+                Log::warning('❌ JWT login failed');
+                $response = response()->json(['error' => 'Unauthorized'], 401);
+                return $this->addCorsHeaders($response, $request);
+            }
 
-    Log::info('✅ JWT login success');
+            Log::info('✅ JWT login success');
 
-        return response()->json([
-            'access_token' => $token,
-            'user' => $user,
-        ]);
+            $response = response()->json([
+                'access_token' => $token,
+                'user' => $user,
+            ]);
+            return $this->addCorsHeaders($response, $request);
+        } catch (\Throwable $e) {
+            Log::error('Login error', [
+                'error' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+            ]);
+            $response = response()->json(['error' => 'Login failed: ' . $e->getMessage()], 500);
+            return $this->addCorsHeaders($response, $request);
+        }
     }
 
         public function refreshToken(Request $request)
@@ -50,7 +64,8 @@ class AuthApiController extends Controller
         $user = User::where('refresh_token', $refreshToken)->first();
 
         if (!$user) {
-            return response()->json(['error' => 'Invalid refresh token'], 401);
+            $response = response()->json(['error' => 'Invalid refresh token'], 401);
+            return $this->addCorsHeaders($response, $request);
         }
 
         $newToken = Auth::login($user);
@@ -58,36 +73,51 @@ class AuthApiController extends Controller
 
         $user->update(['refresh_token' => $newRefreshToken]);
 
-        return response()->json([
+        $response = response()->json([
             'access_token' => $newToken,
             'refresh_token' => $newRefreshToken,
         ]);
+        return $this->addCorsHeaders($response, $request);
     }
 
     public function register(Request $request)
     {
-        $validated = $request->validate([
-            'name' => 'required|string',
-            'email' => 'required|email|unique:users',
-            'password' => 'required|string|min:6',
-            'region' => 'nullable|string', // ✅ accept from client
+        try {
+            $validated = $request->validate([
+                'name' => 'required|string',
+                'email' => 'required|email|unique:users',
+                'password' => 'required|string|min:6',
+                'region' => 'nullable|string', // ✅ accept from client
 
-        ]);
+            ]);
 
-        $user = User::create([
-            'name' => $validated['name'],
-            'email' => $validated['email'],
-            'password' => bcrypt($validated['password']),
-            'region' => $validated['region'] ?? 'local', // ✅ fallback to 'local' if not sent
+            $user = User::create([
+                'name' => $validated['name'],
+                'email' => $validated['email'],
+                'password' => bcrypt($validated['password']),
+                'region' => $validated['region'] ?? 'local', // ✅ fallback to 'local' if not sent
 
-        ]);
+            ]);
 
-        $token = JWTAuth::fromUser($user);
+            $token = JWTAuth::fromUser($user);
 
-        return response()->json([
-            'access_token' => $token,
-            'user' => $user,
-        ]);
+            $response = response()->json([
+                'access_token' => $token,
+                'user' => $user,
+            ]);
+            return $this->addCorsHeaders($response, $request);
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            $response = response()->json(['error' => 'Validation failed', 'errors' => $e->errors()], 422);
+            return $this->addCorsHeaders($response, $request);
+        } catch (\Throwable $e) {
+            Log::error('Register error', [
+                'error' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+            ]);
+            $response = response()->json(['error' => 'Registration failed: ' . $e->getMessage()], 500);
+            return $this->addCorsHeaders($response, $request);
+        }
     }
 
     public function me()
@@ -99,7 +129,8 @@ class AuthApiController extends Controller
     {
         $idToken = $request->input('id_token');
         if (!$idToken) {
-            return response()->json(['error' => 'Missing Google ID token'], 400);
+            $response = response()->json(['error' => 'Missing Google ID token'], 400);
+            return $this->addCorsHeaders($response, $request);
         }
 
         try {
@@ -109,7 +140,8 @@ class AuthApiController extends Controller
             ]);
 
             if (!$googleResponse->ok()) {
-                return response()->json(['error' => 'Invalid Google token'], 401);
+                $response = response()->json(['error' => 'Invalid Google token'], 401);
+                return $this->addCorsHeaders($response, $request);
             }
 
             $googleData = $googleResponse->json();
@@ -118,7 +150,8 @@ class AuthApiController extends Controller
             $region = $request->input('region', 'local'); // ✅ client decides
 
             if (!$email) {
-                return response()->json(['error' => 'Google response missing email'], 422);
+                $response = response()->json(['error' => 'Google response missing email'], 422);
+                return $this->addCorsHeaders($response, $request);
             }
 
             // Check or create user
@@ -133,12 +166,14 @@ class AuthApiController extends Controller
 
             $token = $user->createToken('google-login')->accessToken;
 
-            return response()->json([
+            $response = response()->json([
                 'access_token' => $token,
                 'user' => $user,
             ]);
+            return $this->addCorsHeaders($response, $request);
         } catch (\Exception $e) {
-            return response()->json(['error' => 'Server error: ' . $e->getMessage()], 500);
+            $response = response()->json(['error' => 'Server error: ' . $e->getMessage()], 500);
+            return $this->addCorsHeaders($response, $request);
         }
     }
 
@@ -149,7 +184,8 @@ class AuthApiController extends Controller
         $user = User::where('email', $request->email)->first();
 
         if (!$user) {
-            return response()->json(['error' => 'Email not found'], 404);
+            $response = response()->json(['error' => 'Email not found'], 404);
+            return $this->addCorsHeaders($response, $request);
         }
 
         $code = rand(100000, 999999);
@@ -160,9 +196,11 @@ class AuthApiController extends Controller
                 $message->to($user->email)->subject('Your Password Reset Code');
             });
 
-            return response()->json(['message' => 'Verification code sent']);
+            $response = response()->json(['message' => 'Verification code sent']);
+            return $this->addCorsHeaders($response, $request);
         } catch (\Exception $e) {
-            return response()->json(['error' => 'Failed to send email.'], 500);
+            $response = response()->json(['error' => 'Failed to send email.'], 500);
+            return $this->addCorsHeaders($response, $request);
         }
     }
 
@@ -180,7 +218,8 @@ class AuthApiController extends Controller
     
         if (!$user) {
             \Log::warning('❌ User not found', ['email' => $request->email]);
-            return response()->json(['message' => 'User not found.'], 404);
+            $response = response()->json(['message' => 'User not found.'], 404);
+            return $this->addCorsHeaders($response, $request);
         }
     
         if (!$user || $user->password_reset_code !== $request->code) {
@@ -188,7 +227,8 @@ class AuthApiController extends Controller
                 'submitted' => $request->code,
                 'stored' => $user?->password_reset_code
             ]);
-            return response()->json(['message' => 'Invalid verification code.'], 400);
+            $response = response()->json(['message' => 'Invalid verification code.'], 400);
+            return $this->addCorsHeaders($response, $request);
         }
         
         $user->password = Hash::make($request->password);
@@ -197,7 +237,8 @@ class AuthApiController extends Controller
     
         \Log::info('✅ Password reset success', ['email' => $user->email]);
     
-        return response()->json(['message' => 'Password reset successfully.']);
+        $response = response()->json(['message' => 'Password reset successfully.']);
+        return $this->addCorsHeaders($response, $request);
     }
     
     

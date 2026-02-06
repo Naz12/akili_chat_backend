@@ -1,3 +1,10 @@
+# CORS Headers - Server Level Fallback for OPTIONS requests
+<IfModule mod_rewrite.c>
+    # Handle OPTIONS preflight requests
+    RewriteCond %{REQUEST_METHOD} ^OPTIONS
+    RewriteRule ^(.*)$ $1 [R=200,L]
+</IfModule>
+
 <IfModule mod_rewrite.c>
     <IfModule mod_negotiation.c>
         Options -MultiViews -Indexes

@@ -30,8 +30,13 @@ class TokenUsageApiController extends Controller
         $region = $this->getRegion($request);
         $user = $request->user();
 
-        $subscription = $user->activeSubscription()
+        // Query active subscription with region filter
+        $subscription = $user->subscriptions()
+            ->where('is_active', true)
+            ->whereDate('end_date', '>=', now())
             ->whereHas('plan', fn($q) => $q->where('region', $region))
+            ->with('plan')
+            ->orderByDesc('end_date')
             ->first();
 
         if (!$subscription) {
