@@ -1,4 +1,6 @@
 #!/bin/bash
+# Run this when you see: "The stream or file .../storage/logs/laravel.log could not be opened: Permission denied"
+# PHP-FPM runs as www-data; storage must be writable by that user.
 
 echo "=== Fixing Laravel Storage Permissions ==="
 echo ""

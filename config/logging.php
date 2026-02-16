@@ -18,7 +18,8 @@ return [
     |
     */
 
-    'default' => env('LOG_CHANNEL', 'stack'),
+    // Use stderr when storage/logs isn't writable (e.g. PHP-FPM as www-data). Set LOG_CHANNEL=stack for file logging after fixing permissions.
+    'default' => env('LOG_CHANNEL', 'stderr'),
 
     /*
     |--------------------------------------------------------------------------
