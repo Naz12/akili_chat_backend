@@ -19,6 +19,9 @@ use App\Http\Controllers\Api\PaymentWebhookController;
 use App\Http\Controllers\Api\VisitorApiController;
 use App\Http\Controllers\Api\WebPushApiController;
 use App\Http\Controllers\Api\WebSocketApiController;
+use App\Http\Controllers\Api\PresentationController;
+use App\Http\Controllers\Api\DiagramController;
+use App\Http\Controllers\Api\DocConverterController;
 
 
 Route::prefix('v1')->group(function () {
@@ -62,6 +65,25 @@ Route::prefix('v1')->group(function () {
                 
                 Route::post('/upload', [AIChatApiController::class, 'uploadAttachment'])
                     ->middleware('quota.check');
+                Route::patch('/sessions/{sessionId}/messages/{messageId}', [AiChatHistoryApiController::class, 'updateMessage']);
+            });
+
+            // Tools: PPT, diagram, doc-converter (throttle only; quota checked in controllers)
+            Route::middleware(['throttle:60,1'])->group(function () {
+                Route::post('presentations/generate-outline', [PresentationController::class, 'generateOutline']);
+                Route::post('presentations/generate-content', [PresentationController::class, 'generateContent']);
+                Route::post('presentations/export', [PresentationController::class, 'export']);
+                Route::get('presentations/templates', [PresentationController::class, 'templates']);
+                Route::get('presentations/status', [PresentationController::class, 'status']);
+                Route::get('presentations/result', [PresentationController::class, 'result']);
+                Route::get('presentations/files/{fileId}/download', [PresentationController::class, 'download']);
+                Route::post('diagram/generate', [DiagramController::class, 'generate']);
+                Route::get('diagram/status', [DiagramController::class, 'status']);
+                Route::get('diagram/result', [DiagramController::class, 'result']);
+                Route::get('diagram/files/{fileId}/download', [DiagramController::class, 'download']);
+                Route::post('doc-converter/convert', [DocConverterController::class, 'convert']);
+                Route::get('doc-converter/status', [DocConverterController::class, 'status']);
+                Route::get('doc-converter/result', [DocConverterController::class, 'result']);
             });
 
             Route::middleware('auth:api')->group(function () use ($prefix) {

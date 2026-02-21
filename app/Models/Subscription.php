@@ -20,6 +20,7 @@ class Subscription extends Model
         'metadata',      // Optional: for storing JSON details (e.g. transaction ID, source)
         'grace_period_ends_at',
         'payment_failure_count',
+        'tx_ref',        // Payment reference (required by schema; use placeholder for manual/admin grants)
     ];
 
     protected $casts = [

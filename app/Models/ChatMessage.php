@@ -3,34 +3,37 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class ChatMessage extends Model
 {
-    use HasFactory;
-
     protected $fillable = [
+        'chat_session_id',
         'user_id',
         'guest_session_id',
-        'chat_session_id', // ✅ replace chat_id
         'role',
         'content',
         'is_attachment',
+        'metadata',
     ];
 
-    /**
-     * Belongs to session
-     */
-    public function session()
+    protected $casts = [
+        'is_attachment' => 'boolean',
+        'metadata' => 'array',
+    ];
+
+    public function chatSession(): BelongsTo
     {
         return $this->belongsTo(ChatSession::class, 'chat_session_id');
     }
 
-    /**
-     * Belongs to user
-     */
-    public function user()
+    public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    public function guestSession(): BelongsTo
+    {
+        return $this->belongsTo(GuestSession::class, 'guest_session_id');
     }
 }

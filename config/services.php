@@ -4,86 +4,70 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Third Party Services
+    | Brain / external microservices (transcriber, doc-service)
     |--------------------------------------------------------------------------
-    |
-    | This file is for storing the credentials for third party services such
-    | as Mailgun, Postmark, AWS and more. This file provides the de facto
-    | location for this type of information, allowing packages to have
-    | a conventional file to locate the various service credentials.
-    |
     */
-
-    'postmark' => [
-        'token' => env('POSTMARK_TOKEN'),
-    ],
-
-    'ses' => [
-        'key' => env('AWS_ACCESS_KEY_ID'),
-        'secret' => env('AWS_SECRET_ACCESS_KEY'),
-        'region' => env('AWS_DEFAULT_REGION', 'us-east-1'),
-    ],
-
-    'resend' => [
-        'key' => env('RESEND_KEY'),
-    ],
-
-    'slack' => [
-        'notifications' => [
-            'bot_user_oauth_token' => env('SLACK_BOT_USER_OAUTH_TOKEN'),
-            'channel' => env('SLACK_BOT_USER_DEFAULT_CHANNEL'),
-        ],
-    ],
-
-    'fcm' => [
-        'server_key' => env('FCM_SERVER_KEY'),
-    ],
-
-    'telebirr' => [
-        'secret' => env('TELEBIRR_SECRET'),
-    ],
-
-    'stripe' => [
-        'publishable_key' => env('STRIPE_PUBLISHABLE_KEY'),
-        'secret_key' => env('STRIPE_SECRET_KEY'),
-        'webhook_secret' => env('STRIPE_WEBHOOK_SECRET'),
-        'mode' => env('STRIPE_MODE', 'test'),
-    ],
-
-    'chapa' => [
-        'public_key' => env('CHAPA_PUBLIC_KEY'),
-        'secret_key' => env('CHAPA_SECRET_KEY'),
-        'webhook_secret' => env('CHAPA_WEBHOOK_SECRET'),
-        'mode' => env('CHAPA_MODE', 'test'),
-        'base_url' => env('CHAPA_BASE_URL', 'https://api.chapa.co/v1'),
-    ],
-
-    'flutterwave' => [
-       'secret_key' => env('FLUTTERWAVE_SECRET_KEY'),
-       'redirect_url' => env('FLUTTERWAVE_REDIRECT_URL'),
-       'secret_hash' => env('FLW_SECRET_HASH'),
-    ],
-
-    'twilio' => [
-    'sid' => env('TWILIO_SID'),
-    'token' => env('TWILIO_AUTH_TOKEN'),
-    'from' => env('TWILIO_PHONE_NUMBER'),
-     ],
-
-    // Brain orchestration microservice endpoints
     'brain' => [
         'transcriber_url' => env('TRANSCRIBER_URL'),
+        'transcriber_client_key' => env('TRANSCRIBER_CLIENT_KEY'),
         'doc_service_url' => env('DOC_SERVICE_URL'),
         'hmac_secret' => env('DAGU_HMAC_SECRET'),
-        'transcriber_client_key' => env('TRANSCRIBER_CLIENT_KEY'),
-        'brightdata_dataset_id' => env('TRANSCRIBER_BRIGHTDATA_DATASET_ID'),
     ],
 
-    // Web Push API (VAPID keys)
-    'webpush' => [
-        'vapid_public_key' => env('VAPID_PUBLIC_KEY'),
-        'vapid_private_key' => env('VAPID_PRIVATE_KEY'),
-        'vapid_subject' => env('VAPID_SUBJECT', env('APP_URL')),
+    /*
+    |--------------------------------------------------------------------------
+    | Presentation (PPT) microservice (tools/ppt - async job API)
+    |--------------------------------------------------------------------------
+    | Use X-API-Key; paths: /generate-outline, /generate-content, /export,
+    | GET /jobs/{id}/status, GET /jobs/{id}/result.
+    */
+    'presentation' => [
+        'url' => rtrim((string) env('PRESENTATION_MICROSERVICE_URL', ''), '/'),
+        'api_key' => env('PRESENTATION_MICROSERVICE_API_KEY'),
+        'timeout' => (int) env('PRESENTATION_MICROSERVICE_TIMEOUT', 300),
+        'poll_timeout' => (int) env('PRESENTATION_POLL_TIMEOUT', 30),
+        'default_slides' => (int) env('PRESENTATION_DEFAULT_SLIDES', 10),
+        'outline_path' => '/generate-outline',
+        'content_path' => '/generate-content',
+        'export_path' => '/export',
+        'status_path' => '/jobs/{job_id}/status',
+        'result_path' => '/jobs/{job_id}/result',
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Diagram microservice (tools/diagram)
+    |--------------------------------------------------------------------------
+    */
+    'diagram' => [
+        'url' => rtrim((string) env('DIAGRAM_MICROSERVICE_URL', ''), '/'),
+        'api_key' => env('DIAGRAM_MICROSERVICE_API_KEY'),
+        'timeout' => (int) env('DIAGRAM_MICROSERVICE_TIMEOUT', 120),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Doc-converter microservice (tools/doc-convertor)
+    |--------------------------------------------------------------------------
+    */
+    'doc_converter' => [
+        'url' => rtrim((string) (env('DOC_CONVERTER_URL') ?: env('DOC_CONVERTOR_URL', '')), '/'),
+        'api_key' => env('DOC_CONVERTER_API_KEY') ?: env('DOC_CONVERTOR_API_KEY'),
+        'timeout' => (int) (env('DOC_CONVERTER_TIMEOUT') ?: env('DOC_CONVERTOR_TIMEOUT', 120)),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | AI Manager (default) and OpenAI (fallback)
+    |--------------------------------------------------------------------------
+    */
+    'ai_manager' => [
+        'url' => env('AI_MANAGER_URL'),
+        'key' => env('AI_MANAGER_KEY'),
+        'model' => env('AI_MANAGER_MODEL', 'deepseek-chat'),
+    ],
+    'openai' => [
+        'url' => env('OPENAI_URL'),
+        'key' => env('OPENAI_KEY'),
+    ],
 ];
