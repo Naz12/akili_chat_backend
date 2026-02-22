@@ -50,8 +50,8 @@ class AIChatApiController extends Controller
         $sessionId = $request->input('session_id');
         $attachmentUrl = $request->input('attachment_url');
 
-        // Resolve session: user or guest
-        $session = $this->resolveOrCreateSession($request, $user, $sessionId);
+        // Resolve session: user or guest (pass first message to title new sessions)
+        $session = $this->resolveOrCreateSession($request, $user, $sessionId, $message);
         if (!$session) {
             return response()->json(['error' => 'Could not resolve or create chat session.'], 400);
         }
@@ -148,8 +148,10 @@ class AIChatApiController extends Controller
         return response()->json(['url' => $url]);
     }
 
-    private function resolveOrCreateSession(Request $request, $user, ?string $sessionId): ?ChatSession
+    private function resolveOrCreateSession(Request $request, $user, ?string $sessionId, string $firstMessage = ''): ?ChatSession
     {
+        $titleForNew = $this->titleFromFirstMessage($firstMessage);
+
         if ($user) {
             if ($sessionId) {
                 $session = ChatSession::where('id', $sessionId)->where('user_id', $user->id)->first();
@@ -165,7 +167,7 @@ class AIChatApiController extends Controller
             $useClientId = $sessionId && Str::isUuid($sessionId) && ! ChatSession::where('id', $sessionId)->exists();
             $attrs = [
                 'user_id' => $user->id,
-                'title' => 'Chat',
+                'title' => $titleForNew,
             ];
             if ($useClientId) {
                 $attrs['id'] = $sessionId;
@@ -200,12 +202,25 @@ class AIChatApiController extends Controller
         $attrs = [
             'guest_session_id' => $guestSession->id,
             'is_guest' => true,
-            'title' => 'Chat',
+            'title' => $titleForNew,
         ];
         if ($useClientId) {
             $attrs['id'] = $sessionId;
         }
         return ChatSession::create($attrs);
+    }
+
+    /**
+     * Derive a session title from the user's first message (max 255 chars for DB).
+     */
+    private function titleFromFirstMessage(string $message): string
+    {
+        $trimmed = trim(preg_replace('/\s+/', ' ', $message));
+        if ($trimmed === '') {
+            return 'Chat';
+        }
+        $max = 255;
+        return mb_strlen($trimmed) > $max ? mb_substr($trimmed, 0, $max - 3) . '...' : $trimmed;
     }
 
     private function saveMessage(ChatSession $session, $user, string $role, string $content, bool $isAttachment, ?array $metadata = null): void

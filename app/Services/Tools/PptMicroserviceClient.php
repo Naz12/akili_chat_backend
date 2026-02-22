@@ -198,7 +198,10 @@ class PptMicroserviceClient
                 ];
             }
 
-            $data = $body['data'] ?? $body;
+            // Merge top-level body into data so file_content/download_url at root are not lost
+            // (same issue as diagram: microservice may return payload at top level or in data)
+            $inner = is_array($body['data'] ?? null) ? $body['data'] : [];
+            $data = is_array($body) ? array_merge($body, $inner) : $inner;
             return [
                 'success' => true,
                 'data' => $data,

@@ -104,7 +104,10 @@ class DiagramMicroserviceClient
                 ];
             }
 
-            $data = $body['data'] ?? $body;
+            // Merge top-level body into data so status/download_url at root are not lost
+            // (zooys expects microservice to return status + download_url at top level)
+            $inner = is_array($body['data'] ?? null) ? $body['data'] : [];
+            $data = is_array($body) ? array_merge($body, $inner) : $inner;
             return [
                 'success' => true,
                 'data' => $data,

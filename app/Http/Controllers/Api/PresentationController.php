@@ -9,6 +9,8 @@ use App\Services\GuestUserService;
 use App\Services\Tools\PptMicroserviceClient;
 use App\Services\UsageValidatorService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
@@ -214,16 +216,21 @@ class PresentationController extends Controller
         }
 
         $data = $result['data'] ?? [];
+        $raw = $data['status'] ?? $result['status'] ?? 'unknown';
+        $status = ($raw === 'complete' || $raw === 'done') ? 'completed' : $raw;
         return response()->json([
             'success' => true,
-            'status' => $data['status'] ?? $result['status'] ?? 'unknown',
+            'status' => $status,
             'progress' => $data['progress'] ?? $result['progress'] ?? 0,
             'data' => $data,
         ]);
     }
 
     /**
-     * GET /api/v1/{region}/presentations/result?job_id=
+     * GET /api/v1/{region}/presentations/result?job_id=&session_id=&message_id=
+     * Fetches result from microservice, downloads and stores the file in backend storage,
+     * and returns file_id. Files are persisted so they remain available in chat history.
+     * Optional session_id and message_id link the file to the chat message.
      */
     public function result(Request $request)
     {
@@ -232,51 +239,143 @@ class PresentationController extends Controller
             return response()->json(['success' => false, 'error' => 'job_id required.'], 400);
         }
 
-        $result = $this->pptClient->getJobResult($jobId);
-        if (!$result['success']) {
-            return response()->json(['success' => false, 'error' => $result['error'] ?? 'Failed to get result.'], 502);
+        $maxAttempts = 3;
+        $attempt = 0;
+        $response = null;
+
+        while ($attempt < $maxAttempts) {
+            $result = $this->pptClient->getJobResult($jobId);
+            if (!$result['success']) {
+                return response()->json(['success' => false, 'error' => $result['error'] ?? 'Failed to get result.'], 502);
+            }
+
+            $data = $result['data'] ?? [];
+            $inner = is_array($data) && isset($data['data']) ? $data['data'] : $data;
+            $response = ['success' => true, 'data' => $inner, 'metadata' => is_array($data) && isset($data['metadata']) ? $data['metadata'] : null];
+            if (! is_array($inner)) {
+                return response()->json($response);
+            }
+
+            $nested = is_array($inner['data'] ?? null) ? $inner['data'] : [];
+            $resultBlob = is_array($inner['result'] ?? null) ? $inner['result'] : (is_array($data['result'] ?? null) ? $data['result'] : []);
+            $downloadUrl = $inner['download_url'] ?? $inner['file_url'] ?? $data['download_url'] ?? $data['file_url'] ?? $nested['download_url'] ?? $nested['file_url'] ?? null;
+            $downloadUrl = is_string($downloadUrl) ? trim($downloadUrl) : null;
+            if ($downloadUrl === '') {
+                $downloadUrl = null;
+            }
+            $fileContentB64 = $inner['file_content'] ?? $data['file_content'] ?? $nested['file_content']
+                ?? (is_string($resultBlob['file_content'] ?? null) ? $resultBlob['file_content'] : null)
+                ?? null;
+
+            if (! empty($downloadUrl) || ! empty($fileContentB64)) {
+                break;
+            }
+            $attempt++;
+            if ($attempt < $maxAttempts) {
+                sleep(2);
+            }
         }
 
-        $data = $result['data'] ?? [];
-        $inner = is_array($data) && isset($data['data']) ? $data['data'] : $data;
-        $response = ['success' => true, 'data' => $inner, 'metadata' => is_array($data) && isset($data['metadata']) ? $data['metadata'] : null];
-        if (is_array($inner) && !empty($inner['file_content'])) {
-            $decoded = base64_decode($inner['file_content'], true);
-            if ($decoded !== false) {
-                $fileId = (string) Str::uuid();
-                $rawName = $inner['filename'] ?? 'presentation';
-                $filename = str_ends_with(strtolower($rawName), '.pptx') ? $rawName : $rawName . '.pptx';
-                $path = 'presentations/' . $fileId . '.pptx';
-                if (! Storage::disk('local')->exists('presentations')) {
-                    Storage::disk('local')->makeDirectory('presentations');
+        $fileId = (string) Str::uuid();
+        $rawName = $inner['filename'] ?? $data['filename'] ?? 'presentation';
+        $filename = str_ends_with(strtolower($rawName), '.pptx') ? $rawName : $rawName . '.pptx';
+        $path = 'presentations/' . $fileId . '.pptx';
+        if (! Storage::disk('local')->exists('presentations')) {
+            Storage::disk('local')->makeDirectory('presentations');
+        }
+
+        $fileMeta = $this->generatedFileMetaForChat($request);
+
+        if (! empty($downloadUrl)) {
+            try {
+                $headers = [];
+                $apiKey = config('services.presentation.api_key');
+                if (! empty($apiKey)) {
+                    $headers['X-API-Key'] = $apiKey;
                 }
+                $fileResponse = Http::withHeaders($headers)->timeout(60)->get($downloadUrl);
+                if ($fileResponse->successful()) {
+                    $written = Storage::disk('local')->put($path, $fileResponse->body());
+                    if ($written) {
+                        GeneratedFile::create(array_merge([
+                            'id' => $fileId, 'path' => $path, 'filename' => $filename, 'type' => 'presentation',
+                        ], $fileMeta));
+                        $response['file_id'] = $fileId;
+                        $response['filename'] = $filename;
+                        unset($inner['file_id'], $inner['file_content'], $inner['download_url'], $inner['file_url']);
+                        $response['data'] = $inner;
+                    } else {
+                        Log::error('[PresentationController] Failed to save presentation file from URL', ['path' => $path, 'job_id' => $jobId]);
+                    }
+                }
+            } catch (\Throwable $e) {
+                Log::warning('[PresentationController] Failed to fetch presentation from URL', ['url' => $downloadUrl, 'error' => $e->getMessage()]);
+            }
+        } elseif (! empty($fileContentB64)) {
+            $decoded = base64_decode($fileContentB64, true);
+            if ($decoded !== false && strlen($decoded) > 0) {
                 $written = Storage::disk('local')->put($path, $decoded);
                 if ($written) {
-                    GeneratedFile::create(['id' => $fileId, 'path' => $path, 'filename' => $filename, 'type' => 'presentation']);
+                    GeneratedFile::create(array_merge([
+                        'id' => $fileId, 'path' => $path, 'filename' => $filename, 'type' => 'presentation',
+                    ], $fileMeta));
                     $response['file_id'] = $fileId;
                     $response['filename'] = $filename;
                     unset($inner['file_id'], $inner['file_content']);
                     $response['data'] = $inner;
+                    Log::info('[PresentationController] Presentation saved from base64', ['job_id' => $jobId, 'file_id' => $fileId]);
                 } else {
-                    \Illuminate\Support\Facades\Log::error('[PresentationController] Failed to save presentation file', ['path' => $path, 'job_id' => $jobId]);
+                    Log::error('[PresentationController] Failed to save presentation file', ['path' => $path, 'job_id' => $jobId]);
                 }
+            } else {
+                Log::warning('[PresentationController] Presentation file_content decode failed or empty', ['job_id' => $jobId]);
             }
         }
+
+        if (empty($response['file_id'])) {
+            Log::warning('[PresentationController] Result has no file', [
+                'job_id' => $jobId,
+                'had_download_url' => ! empty($downloadUrl),
+                'had_file_content' => ! empty($fileContentB64),
+                'data_keys' => array_keys($data),
+                'inner_keys' => array_keys($inner),
+            ]);
+        }
+
         return response()->json($response);
     }
 
     /**
+     * Optional meta to link a generated file to the chat message (for history/audit).
+     */
+    private function generatedFileMetaForChat(Request $request): array
+    {
+        $user = $request->user();
+        $guestSession = $user ? null : $this->guestUserService->getGuestSessionFromRequest($request);
+        $sessionId = $request->query('session_id');
+        $messageId = $request->query('message_id');
+
+        return array_filter([
+            'chat_session_id' => is_string($sessionId) && $sessionId !== '' ? $sessionId : null,
+            'chat_message_id' => is_numeric($messageId) ? (int) $messageId : null,
+            'user_id' => $user?->id,
+            'guest_session_id' => $guestSession?->id,
+        ], fn ($v) => $v !== null);
+    }
+
+    /**
      * GET /api/v1/{region}/presentations/files/{fileId}/download
+     * Serves the presentation file from backend storage (persisted for chat history).
      */
     public function download(Request $request, string $fileId)
     {
         $file = GeneratedFile::where('id', $fileId)->where('type', 'presentation')->first();
         if (! $file) {
-            \Illuminate\Support\Facades\Log::warning('[PresentationController] Download: no record', ['file_id' => $fileId]);
+            Log::warning('[PresentationController] Download: no record', ['file_id' => $fileId]);
             return response()->json(['error' => 'File not found.'], 404);
         }
         if (! Storage::disk('local')->exists($file->path)) {
-            \Illuminate\Support\Facades\Log::warning('[PresentationController] Download: record exists but file missing (check storage or use shared disk for multiple servers)', ['file_id' => $fileId, 'path' => $file->path]);
+            Log::warning('[PresentationController] Download: record exists but file missing (check storage or use shared disk for multiple servers)', ['file_id' => $fileId, 'path' => $file->path]);
             return response()->json(['error' => 'File not found.'], 404);
         }
         return Storage::disk('local')->download($file->path, $file->filename ?? $fileId . '.pptx');
