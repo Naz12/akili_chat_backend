@@ -2,6 +2,9 @@
 
 $defaultOrigins = [
     'https://akili.akmicroservice.com',
+    'https://chat.akmicroservice.com',
+    'http://akili.akmicroservice.com',
+    'http://chat.akmicroservice.com',
     'http://localhost:3000',
     'http://127.0.0.1:3000',
     'http://localhost:3001',
@@ -21,7 +24,8 @@ return [
 
     'allowed_origins' => array_values(array_unique($defaultOrigins)),
 
-    'allowed_origins_patterns' => [],
+    // Allow any subdomain of akmicroservice.com (e.g. chat., app., staging.)
+    'allowed_origins_patterns' => ['#^https?://([a-z0-9-]+\.)?akmicroservice\.com$#i'],
 
     'allowed_headers' => ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin', 'X-Guest-UUID', 'X-CSRF-TOKEN', 'Referer', 'User-Agent', 'post'],
 

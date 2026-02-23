@@ -171,9 +171,10 @@ fi
 echo "========== 3. Doc-converter: convert =========="
 TESTFILE=$(mktemp)
 echo "Sample text for conversion test. Line 2." > "$TESTFILE"
+# Doc-converter: convert to md (target_format=text not supported; use md or extract for text)
 CONV_RESP=$(curl -s -X POST "${API}/doc-converter/convert" \
   -F "file=@${TESTFILE}" \
-  -F "target_format=text")
+  -F "target_format=md")
 rm -f "$TESTFILE"
 echo "$CONV_RESP" | head -c 300
 echo ""

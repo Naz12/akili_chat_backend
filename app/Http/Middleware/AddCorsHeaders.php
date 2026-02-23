@@ -44,8 +44,7 @@ class AddCorsHeaders
     private function createCorsResponse(Request $request, int $status = 200): Response
     {
         $origin = $request->headers->get('Origin');
-        $allowedOrigins = config('cors.allowed_origins', []);
-        $allowedOrigin = ($origin && in_array($origin, $allowedOrigins)) ? $origin : ($allowedOrigins[0] ?? '*');
+        $allowedOrigin = $this->resolveAllowedOrigin($origin);
         
         $response = response('', $status);
         
@@ -62,7 +61,29 @@ class AddCorsHeaders
         
         return $response;
     }
-    
+
+    /**
+     * Resolve the Access-Control-Allow-Origin value: exact match or pattern match.
+     */
+    private function resolveAllowedOrigin(?string $origin): string
+    {
+        $allowedOrigins = config('cors.allowed_origins', []);
+        $patterns = config('cors.allowed_origins_patterns', []);
+
+        if ($origin === null || $origin === '') {
+            return $allowedOrigins[0] ?? '*';
+        }
+        if (in_array($origin, $allowedOrigins, true)) {
+            return $origin;
+        }
+        foreach ($patterns as $pattern) {
+            if (is_string($pattern) && preg_match($pattern, $origin)) {
+                return $origin;
+            }
+        }
+        return $allowedOrigins[0] ?? '*';
+    }
+
     /**
      * Add CORS headers to an existing response
      */
@@ -72,11 +93,9 @@ class AddCorsHeaders
         if ($response->headers->has('Access-Control-Allow-Origin')) {
             return;
         }
-        
-        $origin = $request->headers->get('Origin');
-        $allowedOrigins = config('cors.allowed_origins', []);
-        $allowedOrigin = ($origin && in_array($origin, $allowedOrigins)) ? $origin : ($allowedOrigins[0] ?? '*');
-        
+
+        $allowedOrigin = $this->resolveAllowedOrigin($request->headers->get('Origin'));
+
         if ($allowedOrigin !== '*') {
             $response->headers->set('Access-Control-Allow-Origin', $allowedOrigin);
             $response->headers->set('Access-Control-Allow-Credentials', 'true');

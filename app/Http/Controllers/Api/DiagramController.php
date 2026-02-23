@@ -140,7 +140,7 @@ class DiagramController extends Controller
             }
 
             $nested = is_array($inner['data'] ?? null) ? $inner['data'] : [];
-            $downloadUrl = $inner['download_url'] ?? $inner['image_url'] ?? $inner['diagram_url'] ?? $inner['result_url'] ?? $data['download_url'] ?? $data['image_url'] ?? $nested['download_url'] ?? $nested['image_url'] ?? null;
+            $downloadUrl = $inner['download_url'] ?? $inner['image_url'] ?? $inner['diagram_url'] ?? $inner['result_url'] ?? $inner['url'] ?? $inner['file'] ?? $data['download_url'] ?? $data['image_url'] ?? $data['diagram_url'] ?? $data['result_url'] ?? $data['url'] ?? $data['file'] ?? $nested['download_url'] ?? $nested['image_url'] ?? $nested['url'] ?? $nested['file'] ?? null;
             $downloadUrl = is_string($downloadUrl) ? trim($downloadUrl) : null;
             if ($downloadUrl === '') {
                 $downloadUrl = null;
@@ -148,8 +148,9 @@ class DiagramController extends Controller
             $imageBase64 = $inner['image_base64'] ?? $inner['file_content'] ?? $inner['image'] ?? $inner['png_base64'] ?? $inner['image_data'] ?? $inner['result'] ?? $inner['output']
                 ?? $data['image_base64'] ?? $data['file_content'] ?? $data['image'] ?? $data['png_base64'] ?? $data['image_data'] ?? $data['result'] ?? $data['output']
                 ?? $nested['image_base64'] ?? $nested['file_content'] ?? $nested['image'] ?? $nested['png_base64'] ?? $nested['image_data'] ?? $nested['result'] ?? $nested['output'] ?? null;
+            $rawBody = $data['_raw_body'] ?? $inner['_raw_body'] ?? null;
 
-            if (! empty($downloadUrl) || ! empty($imageBase64)) {
+            if (! empty($downloadUrl) || ! empty($imageBase64) || (! empty($rawBody) && is_string($rawBody))) {
                 break;
             }
             $attempt++;
@@ -166,14 +167,35 @@ class DiagramController extends Controller
         $filename = 'diagram.' . $ext;
         $path = 'diagrams/' . $fileId . '.' . $ext;
 
-        if (! Storage::disk('local')->exists('diagrams')) {
-            Storage::disk('local')->makeDirectory('diagrams');
-        }
+        // Ensure storage/app/private and diagrams dir exist; create with 0775 so web server can write
+        $this->ensureStorageDir('diagrams');
 
         $fileMeta = $this->generatedFileMetaForChat($request);
 
+        // Diagram service may return image as binary (FileResponse)
+        if (! empty($rawBody) && is_string($rawBody)) {
+            $written = Storage::disk('local')->put($path, $rawBody);
+            if ($written) {
+                GeneratedFile::create(array_merge([
+                    'id' => $fileId,
+                    'path' => $path,
+                    'filename' => $filename,
+                    'type' => 'diagram',
+                ], $fileMeta));
+                $response['file_id'] = $fileId;
+                $response['filename'] = $filename;
+                Log::info('[DiagramController] Diagram saved from binary response', ['job_id' => $jobId, 'file_id' => $fileId]);
+            } else {
+                Log::error('[DiagramController] Failed to save diagram from binary (storage not writable?)', [
+                    'job_id' => $jobId,
+                    'path' => $path,
+                    'hint' => 'Run ./fix-permissions.sh on the server.',
+                ]);
+                $response['error'] = 'Storage directory is not writable. On the server run: ./fix-permissions.sh from the backend directory.';
+            }
+        }
         // Download and store (same pattern as zooys AIDiagramService::downloadAndStoreImage)
-        if (! empty($downloadUrl)) {
+        if (empty($response['file_id']) && ! empty($downloadUrl)) {
             $apiKey = config('services.diagram.api_key');
             $hasKey = ! empty($apiKey);
             Log::info('[DiagramController] Fetching diagram image', [
@@ -197,7 +219,12 @@ class DiagramController extends Controller
                         $response['filename'] = $filename;
                         Log::info('[DiagramController] Diagram saved', ['job_id' => $jobId, 'file_id' => $fileId]);
                     } else {
-                        Log::error('[DiagramController] Failed to save diagram file from URL', ['path' => $path, 'job_id' => $jobId]);
+                        Log::error('[DiagramController] Failed to save diagram file from URL (storage not writable?)', [
+                            'path' => $path,
+                            'job_id' => $jobId,
+                            'hint' => 'Run ./fix-permissions.sh on the server.',
+                        ]);
+                        $response['error'] = 'Storage directory is not writable. On the server run: ./fix-permissions.sh from the backend directory.';
                     }
                 } else {
                     Log::warning('[DiagramController] Diagram download URL returned non-2xx (check X-API-Key)', [
@@ -210,7 +237,7 @@ class DiagramController extends Controller
             } catch (\Throwable $e) {
                 Log::warning('[DiagramController] Failed to fetch diagram from URL', ['url' => $downloadUrl, 'error' => $e->getMessage(), 'job_id' => $jobId]);
             }
-        } elseif (! empty($imageBase64)) {
+        } elseif (empty($response['file_id']) && ! empty($imageBase64)) {
             $decoded = base64_decode($imageBase64, true);
             if ($decoded !== false && strlen($decoded) > 0) {
                 $written = Storage::disk('local')->put($path, $decoded);
@@ -224,7 +251,12 @@ class DiagramController extends Controller
                     $response['file_id'] = $fileId;
                     $response['filename'] = $filename;
                 } else {
-                    Log::error('[DiagramController] Failed to save diagram file from base64', ['path' => $path, 'job_id' => $jobId]);
+                    Log::error('[DiagramController] Failed to save diagram file from base64 (storage not writable?)', [
+                        'path' => $path,
+                        'job_id' => $jobId,
+                        'hint' => 'Run ./fix-permissions.sh on the server.',
+                    ]);
+                    $response['error'] = 'Storage directory is not writable. On the server run: ./fix-permissions.sh from the backend directory.';
                 }
             }
         }
@@ -257,6 +289,24 @@ class DiagramController extends Controller
             'user_id' => $user?->id,
             'guest_session_id' => $guestSession?->id,
         ], fn ($v) => $v !== null);
+    }
+
+    /**
+     * Ensure storage/app/private and the given subdir exist with 0775 (so web server can write).
+     */
+    private function ensureStorageDir(string $subdir): void
+    {
+        $privateRoot = storage_path('app/private');
+        if (! is_dir($privateRoot)) {
+            @mkdir($privateRoot, 0775, true);
+        }
+        $dir = $privateRoot . DIRECTORY_SEPARATOR . $subdir;
+        if (! is_dir($dir)) {
+            @mkdir($dir, 0775, true);
+        }
+        if (! Storage::disk('local')->exists($subdir)) {
+            Storage::disk('local')->makeDirectory($subdir);
+        }
     }
 
     /**

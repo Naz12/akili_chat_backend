@@ -258,16 +258,22 @@ class PresentationController extends Controller
 
             $nested = is_array($inner['data'] ?? null) ? $inner['data'] : [];
             $resultBlob = is_array($inner['result'] ?? null) ? $inner['result'] : (is_array($data['result'] ?? null) ? $data['result'] : []);
-            $downloadUrl = $inner['download_url'] ?? $inner['file_url'] ?? $data['download_url'] ?? $data['file_url'] ?? $nested['download_url'] ?? $nested['file_url'] ?? null;
+            $downloadUrl = $inner['download_url'] ?? $inner['file_url'] ?? $inner['output_url'] ?? $inner['result_url'] ?? $data['download_url'] ?? $data['file_url'] ?? $data['output_url'] ?? $data['result_url'] ?? $nested['download_url'] ?? $nested['file_url'] ?? null;
             $downloadUrl = is_string($downloadUrl) ? trim($downloadUrl) : null;
             if ($downloadUrl === '') {
                 $downloadUrl = null;
             }
-            $fileContentB64 = $inner['file_content'] ?? $data['file_content'] ?? $nested['file_content']
+            if (empty($downloadUrl)) {
+                $downloadUrl = $inner['file'] ?? $data['file'] ?? null;
+                $downloadUrl = is_string($downloadUrl) ? trim($downloadUrl) : null;
+            }
+            $fileContentB64 = $inner['file_content'] ?? $inner['output_base64'] ?? $inner['content_base64']
+                ?? $data['file_content'] ?? $data['output_base64'] ?? $data['content_base64'] ?? $nested['file_content']
                 ?? (is_string($resultBlob['file_content'] ?? null) ? $resultBlob['file_content'] : null)
                 ?? null;
+            $rawBody = $data['_raw_body'] ?? $inner['_raw_body'] ?? null;
 
-            if (! empty($downloadUrl) || ! empty($fileContentB64)) {
+            if (! empty($downloadUrl) || ! empty($fileContentB64) || (! empty($rawBody) && is_string($rawBody))) {
                 break;
             }
             $attempt++;
@@ -280,13 +286,45 @@ class PresentationController extends Controller
         $rawName = $inner['filename'] ?? $data['filename'] ?? 'presentation';
         $filename = str_ends_with(strtolower($rawName), '.pptx') ? $rawName : $rawName . '.pptx';
         $path = 'presentations/' . $fileId . '.pptx';
+
+        // Ensure storage/app/private and presentations dir exist (same root cause as "no file was produced")
+        $privateRoot = storage_path('app/private');
+        $presentationsDir = $privateRoot . DIRECTORY_SEPARATOR . 'presentations';
+        if (! is_dir($privateRoot)) {
+            @mkdir($privateRoot, 0775, true);
+        }
+        if (! is_dir($presentationsDir)) {
+            @mkdir($presentationsDir, 0775, true);
+        }
         if (! Storage::disk('local')->exists('presentations')) {
             Storage::disk('local')->makeDirectory('presentations');
         }
 
         $fileMeta = $this->generatedFileMetaForChat($request);
 
-        if (! empty($downloadUrl)) {
+        // Export result may be returned as binary (FileResponse) instead of JSON
+        $rawBody = $data['_raw_body'] ?? $inner['_raw_body'] ?? null;
+        if (empty($response['file_id']) && ! empty($rawBody) && is_string($rawBody)) {
+            $written = Storage::disk('local')->put($path, $rawBody);
+            if ($written) {
+                GeneratedFile::create(array_merge([
+                    'id' => $fileId, 'path' => $path, 'filename' => $filename, 'type' => 'presentation',
+                ], $fileMeta));
+                $response['file_id'] = $fileId;
+                $response['filename'] = $filename;
+                unset($inner['_raw_body'], $inner['_content_type']);
+                $response['data'] = $inner;
+                Log::info('[PresentationController] Presentation saved from binary response', ['job_id' => $jobId, 'file_id' => $fileId]);
+            } else {
+                Log::error('[PresentationController] Failed to save presentation from binary (storage not writable?)', [
+                    'job_id' => $jobId,
+                    'hint' => 'Run ./fix-permissions.sh on the server.',
+                ]);
+                $response['error'] = 'Storage directory is not writable. On the server run: ./fix-permissions.sh from the backend directory.';
+            }
+        }
+
+        if (empty($response['file_id']) && ! empty($downloadUrl)) {
             try {
                 $headers = [];
                 $apiKey = config('services.presentation.api_key');
@@ -305,7 +343,12 @@ class PresentationController extends Controller
                         unset($inner['file_id'], $inner['file_content'], $inner['download_url'], $inner['file_url']);
                         $response['data'] = $inner;
                     } else {
-                        Log::error('[PresentationController] Failed to save presentation file from URL', ['path' => $path, 'job_id' => $jobId]);
+                        Log::error('[PresentationController] Failed to save presentation file from URL (storage not writable?)', [
+                            'path' => $path,
+                            'full_path' => storage_path('app/private/' . $path),
+                            'job_id' => $jobId,
+                            'hint' => 'Run ./fix-permissions.sh on the server.',
+                        ]);
                     }
                 }
             } catch (\Throwable $e) {
@@ -325,7 +368,12 @@ class PresentationController extends Controller
                     $response['data'] = $inner;
                     Log::info('[PresentationController] Presentation saved from base64', ['job_id' => $jobId, 'file_id' => $fileId]);
                 } else {
-                    Log::error('[PresentationController] Failed to save presentation file', ['path' => $path, 'job_id' => $jobId]);
+                    Log::error('[PresentationController] Failed to save presentation file (storage not writable?)', [
+                        'path' => $path,
+                        'job_id' => $jobId,
+                        'hint' => 'Run ./fix-permissions.sh on the server.',
+                    ]);
+                    $response['error'] = 'Storage directory is not writable. On the server run: ./fix-permissions.sh from the backend directory.';
                 }
             } else {
                 Log::warning('[PresentationController] Presentation file_content decode failed or empty', ['job_id' => $jobId]);

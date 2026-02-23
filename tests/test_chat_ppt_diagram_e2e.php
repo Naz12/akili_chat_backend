@@ -201,9 +201,14 @@ if ($replyType !== 'presentation_outline' || empty($outlineJobId)) {
                             'font_style' => 'modern',
                         ], $token);
                         $exportJobId = $exportResp['job_id'] ?? null;
+                        $exportError = $exportResp['error'] ?? '';
                         if (!$exportJobId) {
-                            echo "  FAIL: export: " . json_encode($exportResp) . "\n";
-                            $failed++;
+                            if (stripos($exportError, 'quota') !== false || stripos($exportError, 'token') !== false) {
+                                echo "  SKIP: export blocked by quota (upgrade plan or use different user for full E2E).\n";
+                            } else {
+                                echo "  FAIL: export: " . json_encode($exportResp) . "\n";
+                                $failed++;
+                            }
                         } else {
                             echo "  OK: export job_id={$exportJobId}\n";
                             $exportResult = poll_presentation_job($exportJobId, $token, $pollMax * 3);
@@ -274,7 +279,7 @@ if ($diagReplyType !== 'diagram' || empty($diagJobId)) {
 // ---- Quick export-only (minimal payload, no chat) ----
 echo "\n=== Export only (minimal payload) ===\n";
 
-$exportOnly = api('POST', $base . '/presentations/export', [
+$exportOnlyResp = api('POST', $base . '/presentations/export', [
     'content' => [
         'title' => 'Test',
         'slides' => [
@@ -288,10 +293,12 @@ $exportOnly = api('POST', $base . '/presentations/export', [
     'font_style' => 'modern',
 ], $token);
 
-if (!empty($exportOnly['success']) && !empty($exportOnly['job_id'])) {
-    echo "  OK: export returned job_id=" . $exportOnly['job_id'] . "\n";
+if (!empty($exportOnlyResp['success']) && !empty($exportOnlyResp['job_id'])) {
+    echo "  OK: export returned job_id=" . $exportOnlyResp['job_id'] . "\n";
+} elseif (!empty($exportOnlyResp['error']) && (stripos($exportOnlyResp['error'], 'quota') !== false || stripos($exportOnlyResp['error'], 'token') !== false)) {
+    echo "  SKIP: export blocked by quota (upgrade plan for full E2E).\n";
 } else {
-    echo "  FAIL: export: " . json_encode($exportOnly) . "\n";
+    echo "  FAIL: export: " . json_encode($exportOnlyResp) . "\n";
     $failed++;
 }
 

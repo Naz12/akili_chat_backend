@@ -70,7 +70,7 @@ class UsageMeterService
                 'source' => $source,
                 'prompt' => null,
                 'response' => null,
-                'cost' => null,
+                'cost' => 0,
             ]);
 
             $subscription->increment('tokens_used', $tokensUsed);
@@ -90,7 +90,7 @@ class UsageMeterService
                 'source' => $source,
                 'prompt' => null,
                 'response' => null,
-                'cost' => null,
+                'cost' => 0,
             ]);
 
             $metadata = $guestSession->metadata ?? [];

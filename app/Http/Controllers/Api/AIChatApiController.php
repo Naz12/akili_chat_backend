@@ -9,10 +9,13 @@ use App\Services\GuestUserService;
 use App\Services\IntentClassifierService;
 use App\Services\PresentationService;
 use App\Services\Tools\DiagramMicroserviceClient;
+use App\Services\Tools\DocConverterClient;
 use App\Services\Tools\PptMicroserviceClient;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Tymon\JWTAuth\Facades\JWTAuth;
 
@@ -34,6 +37,10 @@ class AIChatApiController extends Controller
             'message' => 'required|string|max:32000',
             'session_id' => 'nullable|string|uuid',
             'attachment_url' => 'nullable|string|url',
+        ], [
+            'message.required' => 'Please enter a message.',
+            'message.max' => 'Message is too long.',
+            'attachment_url.url' => 'Attachment URL is invalid.',
         ]);
 
         $user = $request->user();
@@ -71,9 +78,14 @@ class AIChatApiController extends Controller
                 return $this->sendToolReply($session, $user, $presentationResult);
             }
         } elseif ($intentType === 'diagram' && $confidence >= self::INTENT_CONFIDENCE_THRESHOLD) {
-            $diagramResult = $this->tryDiagramReply($message, true);
+            $diagramResult = $this->tryDiagramReply($message, $intent, true);
             if ($diagramResult !== null) {
                 return $this->sendToolReply($session, $user, $diagramResult);
+            }
+        } elseif ($intentType === 'doc_converter' && $confidence >= self::INTENT_CONFIDENCE_THRESHOLD) {
+            $docConverterResult = $this->tryDocConverterReply($request, $message, $attachmentUrl, $intent, $session, $user);
+            if ($docConverterResult !== null) {
+                return $this->sendToolReply($session, $user, $docConverterResult);
             }
         }
 
@@ -82,9 +94,16 @@ class AIChatApiController extends Controller
         if ($presentationResult !== null) {
             return $this->sendToolReply($session, $user, $presentationResult);
         }
-        $diagramResult = $this->tryDiagramReply($message, false);
+        $diagramResult = $this->tryDiagramReply($message, $intent, false);
         if ($diagramResult !== null) {
             return $this->sendToolReply($session, $user, $diagramResult);
+        }
+        if ($attachmentUrl && $this->hasDocConverterKeywords($message)) {
+            $docConverterIntent = $this->resolveDocConverterIntentFromMessage($message);
+            $docConverterResult = $this->tryDocConverterReply($request, $message, $attachmentUrl, $docConverterIntent, $session, $user);
+            if ($docConverterResult !== null) {
+                return $this->sendToolReply($session, $user, $docConverterResult);
+            }
         }
 
         // Text reply: AI manager (or OpenAI fallback)
@@ -102,6 +121,7 @@ class AIChatApiController extends Controller
         ]);
     }
 
+    /** @return \Illuminate\Http\JsonResponse */
     private function sendToolReply(ChatSession $session, $user, array $toolResult): \Illuminate\Http\JsonResponse
     {
         $reply = $toolResult['reply'];
@@ -135,17 +155,58 @@ class AIChatApiController extends Controller
     {
         $request->validate([
             'file' => 'required|file|max:51200', // 50MB
+        ], [
+            'file.required' => 'Please select a file to upload.',
+            'file.file' => 'Invalid file.',
+            'file.max' => 'File is too large. Maximum size is 50 MB.',
         ]);
 
-        $file = $request->file('file');
-        $path = $file->store('chat-attachments', 'public');
-        $url = $path ? asset('storage/' . $path) : null;
+        try {
+            $disk = Storage::disk('public');
+            $root = storage_path('app/public');
+            $chatDir = 'chat-attachments';
+            $fullPath = $root . DIRECTORY_SEPARATOR . $chatDir;
 
-        if (!$url) {
-            return response()->json(['error' => 'Upload failed.'], 500);
+            // Ensure root exists (storage/app/public)
+            if (! is_dir($root)) {
+                @mkdir($root, 0775, true);
+            }
+            // Ensure chat-attachments directory exists and is writable
+            if (! is_dir($fullPath)) {
+                if (! @mkdir($fullPath, 0775, true)) {
+                    Log::warning('[AIChat] Upload: could not create directory', ['path' => $fullPath]);
+                    return response()->json([
+                        'error' => 'Upload failed. Storage directory could not be created. On the server run: ./fix-permissions.sh from the backend directory.',
+                    ], 500);
+                }
+            }
+            if (! is_writable($fullPath)) {
+                Log::warning('[AIChat] Upload: directory not writable', ['path' => $fullPath]);
+                return response()->json([
+                    'error' => 'Upload failed. Storage directory is not writable. On the server run: ./fix-permissions.sh from the backend directory.',
+                ], 500);
+            }
+
+            $file = $request->file('file');
+            $path = $file->store($chatDir, 'public');
+            if (! $path) {
+                Log::warning('[AIChat] Upload store returned empty path', ['disk' => 'public', 'dir_writable' => is_writable($fullPath)]);
+                return response()->json([
+                    'error' => 'Upload failed. Storage directory may be read-only. On the server run: ./fix-permissions.sh from the backend directory.',
+                ], 500);
+            }
+
+            $url = asset('storage/' . $path);
+            return response()->json(['url' => $url]);
+        } catch (\Throwable $e) {
+            Log::error('[AIChat] Upload failed', [
+                'error' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+            ]);
+            $message = config('app.debug') ? $e->getMessage() : 'Upload failed. Please try again or run ./fix-permissions.sh on the server.';
+            return response()->json(['error' => $message], 500);
         }
-
-        return response()->json(['url' => $url]);
     }
 
     private function resolveOrCreateSession(Request $request, $user, ?string $sessionId, string $firstMessage = ''): ?ChatSession
@@ -293,14 +354,15 @@ class AIChatApiController extends Controller
 
     /**
      * If message looks like a diagram request, submit to tools/diagram and return job_id.
-     * When $trustIntent is true (from classifier), skip keyword check.
-     * Returns ['reply' => string, 'reply_type' => 'diagram', 'job_id' => string] or ['reply' => string] or null.
+     * Uses diagram_type from intent entities (AI) or infers from message. When $trustIntent is true, skip keyword check.
      */
-    private function tryDiagramReply(string $message, bool $trustIntent = false): ?array
+    private function tryDiagramReply(string $message, array $intent = [], bool $trustIntent = false): ?array
     {
         if (! $trustIntent) {
             $lower = strtolower($message);
             $isDiagram = preg_match('/\b(diagram|flowchart|flow chart|mermaid|plantuml|visuali[sz]e)\b/i', $lower)
+                || preg_match('/\b(pie ?chart|bar ?chart|line ?chart|chart of|generate a chart|create a chart|draw a chart)\b/i', $lower)
+                || Str::contains($lower, 'piechart')
                 || Str::contains($lower, 'draw a diagram')
                 || Str::contains($lower, 'create a flowchart')
                 || Str::contains($lower, 'generate a diagram')
@@ -312,18 +374,401 @@ class AIChatApiController extends Controller
             }
         }
 
+        $diagramType = $this->resolveDiagramType($message, $intent);
         $client = app(DiagramMicroserviceClient::class);
-        $result = $client->generateDiagram($message, 'flowchart', 'png');
+        $result = $client->generateDiagram($message, $diagramType, 'png');
 
         if ($result['success'] && ! empty($result['job_id'])) {
             return [
                 'reply' => 'Generating your diagram. This may take a moment…',
                 'reply_type' => 'diagram',
                 'job_id' => $result['job_id'],
+                'payload' => ['diagram_type' => $diagramType],
             ];
         }
 
         return ['reply' => $result['error'] ?? 'Could not start diagram generation. Please try again.'];
+    }
+
+    /** Resolve diagram_type from AI entities or infer from message. Matches tools/diagram: 13 types. */
+    private function resolveDiagramType(string $message, array $intent): string
+    {
+        $allowed = [
+            'flowchart', 'sequence', 'class', 'state', 'er', 'user_journey', 'block', 'mindmap',
+            'pie', 'quadrant', 'timeline', 'sankey', 'xy',
+        ];
+        $fromEntity = $intent['entities']['diagram_type'] ?? null;
+        if (is_string($fromEntity) && $fromEntity !== '') {
+            $normalized = strtolower(trim($fromEntity));
+            if ($normalized === 'journey') {
+                $normalized = 'user_journey';
+            }
+            if (in_array($normalized, $allowed, true)) {
+                return $normalized;
+            }
+        }
+        $lower = strtolower($message);
+        if (preg_match('/\bsequence\b/i', $lower)) {
+            return 'sequence';
+        }
+        if (preg_match('/\b(class diagram|object relationship)\b/i', $lower)) {
+            return 'class';
+        }
+        if (preg_match('/\b(entity|er diagram|database)\b/i', $lower)) {
+            return 'er';
+        }
+        if (preg_match('/\b(state machine|state diagram)\b/i', $lower)) {
+            return 'state';
+        }
+        if (preg_match('/\b(user ?journey|journey map)\b/i', $lower)) {
+            return 'user_journey';
+        }
+        if (preg_match('/\b(block diagram|architecture)\b/i', $lower)) {
+            return 'block';
+        }
+        if (preg_match('/\bmind ?map\b/i', $lower)) {
+            return 'mindmap';
+        }
+        if (preg_match('/\bpie\b/i', $lower)) {
+            return 'pie';
+        }
+        if (preg_match('/\bquadrant\b/i', $lower)) {
+            return 'quadrant';
+        }
+        if (preg_match('/\btimeline\b/i', $lower)) {
+            return 'timeline';
+        }
+        if (preg_match('/\bsankey\b/i', $lower)) {
+            return 'sankey';
+        }
+        if (preg_match('/\b(xy|scatter|line chart)\b/i', $lower)) {
+            return 'xy';
+        }
+        return 'flowchart';
+    }
+
+    private const DOC_CONVERTER_CACHE_PREFIX = 'doc_convert_job:';
+    private const DOC_CONVERTER_CACHE_TTL = 3600;
+
+    /**
+     * If intent is doc_converter and user attached a file, run the requested operation
+     * (convert, extract, merge message, split, or PDF: compress, watermark, page_numbers, protect, unlock, preview, edit_pdf).
+     */
+    private function tryDocConverterReply(Request $request, string $message, ?string $attachmentUrl, array $intent, ChatSession $session, $user): ?array
+    {
+        if (empty($attachmentUrl)) {
+            return ['reply' => 'Please attach a document. Supported doc-converter operations (confirmed): Convert, Extract, Split, Compress, Page numbers, Watermark, Protect. Merge requires multiple files.'];
+        }
+
+        $entities = $intent['entities'] ?? [];
+        $operation = strtolower(trim((string) ($entities['operation'] ?? 'convert')));
+        if (! in_array($operation, self::DOC_CONVERTER_OPERATIONS, true)) {
+            $operation = 'convert';
+        }
+        $targetFormat = $this->resolveDocConverterTargetFormat($message, $intent);
+        $splitPoints = trim((string) ($entities['split_points'] ?? ''));
+        // Microservice "convert" does not support target_format=text; use extract for text.
+        if ($operation === 'convert' && $targetFormat === 'text') {
+            $operation = 'extract';
+        }
+
+        if ($operation === 'merge') {
+            return ['reply' => 'To merge documents, please attach multiple files and use the Merge option, or use the doc-converter merge endpoint with multiple files.'];
+        }
+
+        if ($operation === 'split' && $splitPoints === '') {
+            return ['reply' => 'To split a PDF, please specify at which page numbers to split (e.g. "split at pages 3, 7 and 12").'];
+        }
+
+        // PDF operations that need extra params from the user
+        if ($operation === 'protect') {
+            $password = trim((string) ($entities['password'] ?? ''));
+            if ($password === '') {
+                return ['reply' => 'To protect this PDF, please tell me the password (e.g. "protect with password mypass").'];
+            }
+        }
+        if ($operation === 'unlock') {
+            $password = trim((string) ($entities['password'] ?? ''));
+            if ($password === '') {
+                return ['reply' => 'To unlock this PDF, please provide the document password (e.g. "unlock with password mypass").'];
+            }
+        }
+        if ($operation === 'watermark') {
+            $content = trim((string) ($entities['watermark_content'] ?? ''));
+            if ($content === '') {
+                return ['reply' => 'To add a watermark, please say the text to use (e.g. "add watermark CONFIDENTIAL" or "watermark with DRAFT").'];
+            }
+        }
+        if ($operation === 'edit_pdf') {
+            $pageOrder = trim((string) ($entities['page_order'] ?? ''));
+            if ($pageOrder === '') {
+                return ['reply' => 'To reorder pages, please specify the order (e.g. "reverse pages" or "reorder to 1, 3, 2").'];
+            }
+        }
+        if ($operation === 'annotate') {
+            return ['reply' => 'To add annotations (shapes, text, highlights), please use the doc-converter tool with a JSON annotations array, or say "convert to PDF" after editing elsewhere.'];
+        }
+
+        $tempPath = $this->downloadAttachmentToTemp($attachmentUrl);
+        if ($tempPath === null) {
+            return ['reply' => 'Could not read the attached file. Please try again or upload again.'];
+        }
+
+        $client = app(DocConverterClient::class);
+        $result = null;
+        try {
+            if ($operation === 'split') {
+                $result = $client->splitDocument($tempPath, ['split_points' => $splitPoints]);
+            } elseif ($operation === 'extract') {
+                $result = $client->extractDocument($tempPath, 'text');
+            } elseif ($operation === 'convert') {
+                $result = $client->convertDocument($tempPath, $targetFormat);
+            } elseif (in_array($operation, ['compress', 'watermark', 'page_numbers', 'annotate', 'protect', 'unlock', 'preview', 'edit_pdf'], true)) {
+                $params = $this->buildPdfOperationParamsForChat($operation, $entities);
+                $result = $client->postPdfOperation($operation, $tempPath, $params);
+            } else {
+                $result = $client->convertDocument($tempPath, $targetFormat);
+            }
+        } finally {
+            if ($tempPath && file_exists($tempPath)) {
+                @unlink($tempPath);
+            }
+        }
+
+        if (! $result['success'] || empty($result['job_id'])) {
+            return ['reply' => $result['error'] ?? 'Doc-converter is temporarily unavailable. Please try again.'];
+        }
+
+        $jobId = $result['job_id'];
+        $guestSession = ! $user ? $this->guestUserService->getGuestSessionFromRequest($request) : null;
+        Cache::put(self::DOC_CONVERTER_CACHE_PREFIX . $jobId, [
+            'user_id' => $user?->id,
+            'guest_session_id' => $guestSession?->id,
+            'chat_session_id' => $session->id,
+            'operation' => $operation,
+        ], self::DOC_CONVERTER_CACHE_TTL);
+
+        $replyMsg = match ($operation) {
+            'split' => 'Splitting your document. This may take a moment…',
+            'extract' => 'Extracting text from your document. This may take a moment…',
+            'compress' => 'Compressing your PDF. This may take a moment…',
+            'watermark' => 'Adding watermark. This may take a moment…',
+            'page_numbers' => 'Adding page numbers. This may take a moment…',
+            'protect' => 'Protecting your PDF. This may take a moment…',
+            'unlock' => 'Unlocking your PDF. This may take a moment…',
+            'preview' => 'Generating preview. This may take a moment…',
+            'edit_pdf' => 'Reordering pages. This may take a moment…',
+            default => 'Converting your document. This may take a moment…',
+        };
+        $operationsList = 'Supported doc-converter operations (confirmed): Convert, Extract, Split, Compress, Page numbers, Watermark, Protect. Merge requires multiple files.';
+        return [
+            'reply' => $replyMsg . "\n\n" . $operationsList,
+            'reply_type' => 'doc_converter',
+            'job_id' => $jobId,
+            'payload' => ['operation' => $operation, 'target_format' => $operation === 'convert' ? $targetFormat : null],
+        ];
+    }
+
+    /** Build params for PDF operations from chat intent entities. */
+    private function buildPdfOperationParamsForChat(string $operation, array $entities): array
+    {
+        $params = [];
+        switch ($operation) {
+            case 'watermark':
+                $params['watermark_type'] = $entities['watermark_type'] ?? 'text';
+                $params['watermark_content'] = trim((string) ($entities['watermark_content'] ?? ''));
+                break;
+            case 'protect':
+            case 'unlock':
+                $params['password'] = trim((string) ($entities['password'] ?? ''));
+                break;
+            case 'edit_pdf':
+                $params['page_order'] = trim((string) ($entities['page_order'] ?? 'as_is'));
+                break;
+            case 'compress':
+                if (isset($entities['compression_level'])) {
+                    $params['compression_level'] = $entities['compression_level'];
+                }
+                break;
+            case 'page_numbers':
+            case 'preview':
+                // Optional params can be added from entities if we parse them later
+                break;
+        }
+        return $params;
+    }
+
+    /** Allowed doc-converter operations from chat (convert, extract, merge, split + PDF ops). */
+    private const DOC_CONVERTER_OPERATIONS = [
+        'convert', 'extract', 'merge', 'split',
+        'compress', 'watermark', 'page_numbers', 'annotate', 'protect', 'unlock', 'preview', 'edit_pdf',
+    ];
+
+    /** Keyword check for doc-converter fallback (mirrors IntentClassifierService). */
+    private function hasDocConverterKeywords(string $message): bool
+    {
+        $lower = strtolower($message);
+        if (preg_match('/\b(convert|merge|split|extract|compress|watermark|page\s*numbers?|protect|unlock|preview|edit\s*pdf|reorder|reverse)\b/i', $lower)) {
+            return true;
+        }
+        if (preg_match('/\b(to|into|as)\s+(jpg|jpeg|png|pdf|docx?|md|text|word|image)\b/i', $lower)) {
+            return true;
+        }
+        return str_contains($lower, 'convert this') || str_contains($lower, 'convert the')
+            || str_contains($lower, 'turn this into') || str_contains($lower, 'to image')
+            || str_contains($lower, 'add watermark') || str_contains($lower, 'protect with password')
+            || str_contains($lower, 'make this pdf smaller');
+    }
+
+    /** Build intent entities for doc_converter from message when LLM did not classify as doc_converter. */
+    private function resolveDocConverterIntentFromMessage(string $message): array
+    {
+        $lower = strtolower($message);
+        $operation = 'convert';
+        $entities = [];
+
+        if (preg_match('/\b(merge|combine)\b/i', $lower)) {
+            $operation = 'merge';
+        } elseif (preg_match('/\bsplit\b/i', $lower)) {
+            $operation = 'split';
+            if (preg_match('/\b(?:at|page|pages?)\s*(\d+(?:\s*(?:,|\band\b)\s*\d+)*)/i', $message, $m)) {
+                $entities['split_points'] = preg_replace('/\s*(?:,|\band\b)\s*/', ',', trim($m[1]));
+            } else {
+                $entities['split_points'] = '';
+            }
+            $entities['operation'] = 'split';
+            return ['intent' => 'doc_converter', 'confidence' => 0.8, 'entities' => $entities];
+        } elseif (preg_match('/\b(extract|get)\s+text\b/i', $lower) || str_contains($lower, 'to text')) {
+            $operation = 'extract';
+        } elseif (preg_match('/\bcompress\b/i', $lower) || str_contains($lower, 'make this pdf smaller') || str_contains($lower, 'reduce file size')) {
+            $operation = 'compress';
+        } elseif (preg_match('/\bwatermark\b/i', $lower) || str_contains($lower, 'add watermark')) {
+            $operation = 'watermark';
+            if (preg_match('/watermark\s+["\']?([^"\']+)["\']?|watermark\s+(?:with|:)\s*["\']?([^"\']+)["\']?/i', $message, $wm)) {
+                $entities['watermark_content'] = trim($wm[1] ?? $wm[2] ?? '');
+                $entities['watermark_type'] = 'text';
+            }
+        } elseif (preg_match('/\bpage\s*numbers?\b/i', $lower) || str_contains($lower, 'add page numbers')) {
+            $operation = 'page_numbers';
+        } elseif (preg_match('/\bprotect\b/i', $lower) || str_contains($lower, 'password protect')) {
+            $operation = 'protect';
+            if (preg_match('/password\s+["\']?([^\s"\']+)["\']?|with\s+password\s+["\']?([^\s"\']+)["\']?/i', $message, $pw)) {
+                $entities['password'] = trim($pw[1] ?? $pw[2] ?? '');
+            }
+        } elseif (preg_match('/\bunlock\b/i', $lower) || str_contains($lower, 'remove password')) {
+            $operation = 'unlock';
+            if (preg_match('/password\s+["\']?([^\s"\']+)["\']?|(?:is|:)\s*["\']?([^\s"\']+)["\']?/i', $message, $pw)) {
+                $entities['password'] = trim($pw[1] ?? $pw[2] ?? '');
+            }
+        } elseif (preg_match('/\bpreview\b/i', $lower) || str_contains($lower, 'thumbnail')) {
+            $operation = 'preview';
+        } elseif (preg_match('/\bedit\s*pdf\b|\breorder\s*pages?\b|\breverse\s*pages?\b/i', $lower)) {
+            $operation = 'edit_pdf';
+            if (preg_match('/\breverse\b/i', $lower)) {
+                $entities['page_order'] = 'reverse';
+            } elseif (preg_match('/\b(?:order|pages?)\s*[:\s]*(\d+(?:\s*,\s*\d+)*)/i', $message, $m)) {
+                $entities['page_order'] = preg_replace('/\s+/', ',', trim($m[1]));
+            }
+        }
+
+        $entities['operation'] = $operation;
+        if ($operation === 'convert') {
+            $entities['target_format'] = $this->resolveDocConverterTargetFormat($message, ['entities' => []]);
+        }
+        return ['intent' => 'doc_converter', 'confidence' => 0.8, 'entities' => $entities];
+    }
+
+    /** Resolve target_format for convert. Microservice: doc, docx, html, jpg, md, pdf, png, ppt, pptx, xls, xlsx. */
+    private function resolveDocConverterTargetFormat(string $message, array $intent): string
+    {
+        $fromEntity = isset($intent['entities']['target_format']) ? strtolower(trim((string) $intent['entities']['target_format'])) : '';
+        $allowed = ['doc', 'docx', 'html', 'jpg', 'jpeg', 'md', 'pdf', 'png', 'ppt', 'pptx', 'xls', 'xlsx', 'text'];
+        if ($fromEntity !== '' && in_array($fromEntity, $allowed, true)) {
+            return $fromEntity === 'jpeg' ? 'jpg' : $fromEntity;
+        }
+        $lower = strtolower($message);
+        if (preg_match('/\b(?:to|into|as)\s+(jpg|jpeg)\b/i', $lower) || str_contains($lower, 'as jpg')) {
+            return 'jpg';
+        }
+        if (preg_match('/\b(?:to|into|as)\s+png\b/i', $lower) || str_contains($lower, 'as png')) {
+            return 'png';
+        }
+        if (preg_match('/\b(?:to|into|as)\s+pdf\b/i', $lower)) {
+            return 'pdf';
+        }
+        if (preg_match('/\b(?:to|into|as)\s+(?:docx?|word)\b/i', $lower)) {
+            return 'docx';
+        }
+        if (preg_match('/\b(?:to|into|as)\s+(?:md|markdown)\b/i', $lower) || str_contains($lower, 'to text')) {
+            return 'md';
+        }
+        return $fromEntity !== '' ? ($fromEntity === 'jpeg' ? 'jpg' : $fromEntity) : 'md';
+    }
+
+    /**
+     * Download attachment from URL to a temp file for doc-converter (etc.).
+     * If the URL points to our own storage (e.g. /storage/chat-attachments/...), read from disk
+     * so the server does not need to HTTP GET itself (which can fail due to hostname/SSL).
+     */
+    private function downloadAttachmentToTemp(?string $url): ?string
+    {
+        if (empty($url)) {
+            return null;
+        }
+        $urlPath = parse_url($url, PHP_URL_PATH);
+        $urlPath = $urlPath !== null ? trim($urlPath, '/') : '';
+
+        // Our upload returns asset('storage/' . $path) with $path = 'chat-attachments/...'
+        if (str_starts_with($urlPath, 'storage/chat-attachments/')) {
+            $relativePath = substr($urlPath, strlen('storage/'));
+            $localPath = Storage::disk('public')->path($relativePath);
+            if (is_readable($localPath)) {
+                try {
+                    $ext = pathinfo($localPath, PATHINFO_EXTENSION) ?: 'bin';
+                    $tmp = tempnam(sys_get_temp_dir(), 'akili_doc_');
+                    if ($tmp === false) {
+                        return null;
+                    }
+                    $path = $tmp . '.' . $ext;
+                    if (! rename($tmp, $path)) {
+                        @unlink($tmp);
+                        return null;
+                    }
+                    if (copy($localPath, $path)) {
+                        return $path;
+                    }
+                    @unlink($path);
+                } catch (\Throwable $e) {
+                    Log::warning('[AIChat] Copy local attachment failed', ['url' => $url, 'local' => $localPath, 'error' => $e->getMessage()]);
+                }
+                return null;
+            }
+            Log::warning('[AIChat] Local attachment not readable', ['url' => $url, 'local' => $localPath]);
+            return null;
+        }
+
+        try {
+            $response = Http::timeout(30)->get($url);
+            if (! $response->successful()) {
+                Log::warning('[AIChat] Download attachment HTTP failed', ['url' => $url, 'status' => $response->status()]);
+                return null;
+            }
+            $tmp = tempnam(sys_get_temp_dir(), 'akili_doc_');
+            if ($tmp === false) {
+                return null;
+            }
+            $ext = pathinfo($urlPath ?: '', PATHINFO_EXTENSION) ?: 'bin';
+            $path = $tmp . '.' . $ext;
+            if (! rename($tmp, $path)) {
+                @unlink($tmp);
+                return null;
+            }
+            file_put_contents($path, $response->body());
+            return $path;
+        } catch (\Throwable $e) {
+            Log::warning('[AIChat] Download attachment failed', ['url' => $url, 'error' => $e->getMessage()]);
+            return null;
+        }
     }
 
     private function callAi(string $message, ChatSession $session, ?string $attachmentUrl): ?string

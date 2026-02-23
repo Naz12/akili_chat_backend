@@ -82,8 +82,14 @@ Route::prefix('v1')->group(function () {
                 Route::get('diagram/result', [DiagramController::class, 'result']);
                 Route::get('diagram/files/{fileId}/download', [DiagramController::class, 'download']);
                 Route::post('doc-converter/convert', [DocConverterController::class, 'convert']);
+                Route::post('doc-converter/extract', [DocConverterController::class, 'extract']);
+                Route::post('doc-converter/merge', [DocConverterController::class, 'merge']);
+                Route::post('doc-converter/split', [DocConverterController::class, 'split']);
+                Route::post('doc-converter/pdf/{operation}', [DocConverterController::class, 'pdfOperation']);
                 Route::get('doc-converter/status', [DocConverterController::class, 'status']);
                 Route::get('doc-converter/result', [DocConverterController::class, 'result']);
+                Route::get('doc-converter/download', [DocConverterController::class, 'download']);
+                Route::get('doc-converter/files/{fileId}/download', [DocConverterController::class, 'downloadFile']);
             });
 
             Route::middleware('auth:api')->group(function () use ($prefix) {

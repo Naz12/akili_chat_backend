@@ -129,7 +129,7 @@ class AiChatHistoryApiController extends Controller
         }
         $request->validate([
             'metadata' => 'required|array',
-            'metadata.reply_type' => 'required|string|in:presentation_outline,presentation_content,presentation_export,diagram',
+            'metadata.reply_type' => 'required|string|in:presentation_outline,presentation_content,presentation_export,diagram,doc_converter',
             'metadata.payload' => 'nullable|array',
         ]);
         $meta = $request->input('metadata');
@@ -149,11 +149,18 @@ class AiChatHistoryApiController extends Controller
             $cost = (int) config('tools.usage.presentation.export_cost', 1000);
         } elseif ($meta['reply_type'] === 'diagram') {
             $cost = (int) config('tools.usage.diagram.cost', 300);
+        } elseif ($meta['reply_type'] === 'doc_converter') {
+            $cost = (int) config('tools.usage.doc_converter.cost', 200);
         }
         $user = $request->user();
         $guestSession = !$user && $session->guest_session_id ? $session->guestSession : null;
+        $toolSource = match ($meta['reply_type'] ?? '') {
+            'diagram' => 'diagram',
+            'doc_converter' => 'doc_converter',
+            default => 'presentation',
+        };
         try {
-            $this->usageMeterService->record($cost, $meta['reply_type'] === 'diagram' ? 'diagram' : 'presentation', $user, $guestSession, $session->id);
+            $this->usageMeterService->record($cost, $toolSource, $user, $guestSession, $session->id);
         } catch (\Throwable $e) {
             \Illuminate\Support\Facades\Log::warning('[AiChatHistory] Usage recording failed on message update', [
                 'message_id' => $messageId,

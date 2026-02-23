@@ -187,8 +187,8 @@ class PptMicroserviceClient
                 ->timeout($this->pollTimeout())
                 ->get($url);
 
-            $body = $response->json() ?? [];
             if (!$response->successful()) {
+                $body = $response->json() ?? [];
                 $raw = $body['message'] ?? $body['error'] ?? $response->body() ?: "HTTP {$response->status()}";
                 $error = is_string($raw) ? $raw : json_encode($raw);
                 return [
@@ -198,8 +198,25 @@ class PptMicroserviceClient
                 ];
             }
 
+            // Export result may be returned as binary (FileResponse) instead of JSON
+            $contentType = $response->header('Content-Type');
+            $bodyRaw = $response->body();
+            if ($bodyRaw !== '' && ($this->isBinaryContentType($contentType) || ! $this->looksLikeJson($bodyRaw))) {
+                $data = [
+                    '_raw_body' => $bodyRaw,
+                    '_content_type' => $contentType ?: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+                    'status' => 'completed',
+                ];
+                return [
+                    'success' => true,
+                    'data' => $data,
+                    'status' => 'completed',
+                    'progress' => 100,
+                ];
+            }
+
+            $body = $response->json() ?? [];
             // Merge top-level body into data so file_content/download_url at root are not lost
-            // (same issue as diagram: microservice may return payload at top level or in data)
             $inner = is_array($body['data'] ?? null) ? $body['data'] : [];
             $data = is_array($body) ? array_merge($body, $inner) : $inner;
             return [
@@ -222,5 +239,22 @@ class PptMicroserviceClient
             $headers['X-API-Key'] = $key;
         }
         return $headers;
+    }
+
+    private function isBinaryContentType(?string $contentType): bool
+    {
+        if (empty($contentType)) {
+            return false;
+        }
+        $primary = strtolower(trim(explode(';', $contentType)[0]));
+        return $primary === 'application/octet-stream'
+            || str_contains($primary, 'vnd.openxmlformats-officedocument.presentationml')
+            || str_contains($primary, 'application/vnd.ms-powerpoint');
+    }
+
+    private function looksLikeJson(string $body): bool
+    {
+        $trimmed = ltrim($body);
+        return str_starts_with($trimmed, '{') || str_starts_with($trimmed, '[');
     }
 }
