@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\GeneratedFile;
 use App\Models\GuestSession;
 use App\Models\Plan;
 use App\Models\User;
@@ -15,6 +16,7 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 
 class DocConverterController extends Controller
 {
@@ -78,7 +80,7 @@ class DocConverterController extends Controller
             return response()->json(['success' => false, 'error' => 'Doc-converter service did not return a job. Please try again.'], 502);
         }
         if ($jobId) {
-            $this->cacheJobPayload($request, $jobId, 'convert');
+            $this->cacheJobPayload($request, $jobId, 'convert', ['target_format' => $targetFormat]);
         }
 
         return response()->json([
@@ -188,17 +190,20 @@ class DocConverterController extends Controller
         ]);
     }
 
-    private function cacheJobPayload(Request $request, string $jobId, string $operation = 'convert'): void
+    /**
+     * @param  array<string, mixed>  $extra  Extra keys to store (e.g. target_format for convert)
+     */
+    private function cacheJobPayload(Request $request, string $jobId, string $operation = 'convert', array $extra = []): void
     {
         $user = $request->user();
         $guestSession = ! $user ? $this->guestUserService->getGuestSessionFromRequest($request) : null;
         $sessionId = $request->input('session_id');
-        Cache::put(self::CACHE_PREFIX . $jobId, [
+        Cache::put(self::CACHE_PREFIX . $jobId, array_merge([
             'user_id' => $user?->id,
             'guest_session_id' => $guestSession?->id,
             'chat_session_id' => $sessionId,
             'operation' => $operation,
-        ], self::CACHE_TTL_SECONDS);
+        ], $extra), self::CACHE_TTL_SECONDS);
     }
 
     /** PDF operations that use /v1/pdf/{operation}/status and result. */
@@ -429,12 +434,17 @@ class DocConverterController extends Controller
             $raw = $data['status'] ?? 'unknown';
         }
         $status = ($raw === 'complete' || $raw === 'done') ? 'completed' : $raw;
-        return response()->json([
+        $payload = [
             'success' => true,
             'status' => $status ?? 'unknown',
             'progress' => $data['progress'] ?? $result['progress'] ?? 0,
             'data' => $data,
-        ]);
+        ];
+        // Forward microservice error when failed (same as zooys) so UI can show reason
+        if ($status === 'failed') {
+            $payload['error'] = $data['error'] ?? $data['message'] ?? $result['error'] ?? null;
+        }
+        return response()->json($payload);
     }
 
     /**
@@ -557,9 +567,10 @@ class DocConverterController extends Controller
         // Doc-converter returns FileResponse (binary) for single-file result; body is in _raw_body
         $rawBody = $rawData['_raw_body'] ?? $responseData['_raw_body'] ?? null;
         if (empty($responseData['download_url']) && ! empty($rawBody) && is_string($rawBody)) {
+            // Use Content-Type for extension only when we don't have user-requested target_format (so we don't save as .pdf when user asked for JPG)
             $contentType = $rawData['_content_type'] ?? null;
             $extFromType = $this->extensionFromContentType($contentType);
-            if ($extFromType) {
+            if ($extFromType && (empty($targetFormat) || $operation !== 'convert')) {
                 $ext = $extFromType;
             }
             $fileId = $this->saveDocConverterOutput($request, $jobId, $rawBody, $ext);
@@ -575,29 +586,22 @@ class DocConverterController extends Controller
             $urls = $responseData['download_urls'] ?? [];
             $urlToFetch = is_array($urls) && isset($urls[0]) ? $urls[0] : null;
         }
-        if (! empty($urlToFetch) && is_string($urlToFetch)) {
-            $isOurDownload = str_contains($urlToFetch, '/doc-converter/');
-            $isExternal = filter_var($urlToFetch, FILTER_VALIDATE_URL) && ! $isOurDownload;
-            if ($isExternal) {
-                try {
-                    $response = Http::withHeaders($headers)->timeout(60)->get($urlToFetch);
-                    if ($response->successful()) {
-                        $body = $response->body();
-                        $contentType = $response->header('Content-Type');
-                        $ext = $this->extensionFromContentType($contentType) ?: $ext;
-                        $fileId = $this->saveDocConverterOutput($request, $jobId, $body, $ext);
-                        if ($fileId) {
-                            $responseData['file_id'] = $fileId;
-                            $responseData['download_url'] = $ourDownloadUrlByFileId($fileId);
-                            if (! empty($responseData['download_urls'])) {
-                                $responseData['download_urls'] = [$ourDownloadUrlByFileId($fileId)];
-                            }
-                        }
-                    } else {
-                        Log::warning('[DocConverterController] Failed to fetch result file from microservice', ['job_id' => $jobId, 'status' => $response->status()]);
+        $fetched = $this->fetchOneUrlToStorage($request, $jobId, $urlToFetch, $baseUrl, $headers, $ext, $responseData, $ourDownloadUrlByFileId);
+        if ($fetched) {
+            $responseData = $fetched;
+        }
+
+        // Fallback: result had no usable URL; get download_urls from status endpoint (like zooys)
+        if (empty($responseData['file_id']) && $baseUrl !== '') {
+            $statusResult = $this->docConverterClient->getConversionStatus($jobId);
+            if ($statusResult['success'] && is_array($statusResult['data'] ?? null)) {
+                $statusUrls = $statusResult['data']['download_urls'] ?? [];
+                $firstStatusUrl = is_array($statusUrls) && isset($statusUrls[0]) ? $statusUrls[0] : null;
+                if ($firstStatusUrl && is_string($firstStatusUrl)) {
+                    $fetched = $this->fetchOneUrlToStorage($request, $jobId, $firstStatusUrl, $baseUrl, $headers, $ext, $responseData, $ourDownloadUrlByFileId);
+                    if ($fetched) {
+                        $responseData = $fetched;
                     }
-                } catch (\Throwable $e) {
-                    Log::warning('[DocConverterController] Exception fetching result file', ['job_id' => $jobId, 'error' => $e->getMessage()]);
                 }
             }
         }
@@ -619,6 +623,53 @@ class DocConverterController extends Controller
         unset($responseData['_raw_body'], $responseData['_content_type']);
 
         return $responseData;
+    }
+
+    /**
+     * Fetch one URL from the microservice (absolute or relative), save to storage, return responseData with file_id and download_url set.
+     * Returns updated responseData on success, null otherwise.
+     *
+     * @param  array<string, mixed>  $responseData
+     */
+    private function fetchOneUrlToStorage(Request $request, string $jobId, mixed $urlToFetch, string $baseUrl, array $headers, string $ext, array $responseData, callable $ourDownloadUrlByFileId): ?array
+    {
+        if (empty($urlToFetch) || ! is_string($urlToFetch)) {
+            return null;
+        }
+        // Ignore plain filenames (e.g. "page_1.jpg") or paths that are not URLs
+        if (! str_starts_with($urlToFetch, '/') && ! filter_var($urlToFetch, FILTER_VALIDATE_URL)) {
+            return null;
+        }
+        if (str_starts_with($urlToFetch, '/') && $baseUrl !== '') {
+            $urlToFetch = rtrim($baseUrl, '/') . $urlToFetch;
+        }
+        $isOurDownload = str_contains($urlToFetch, '/doc-converter/');
+        if (! filter_var($urlToFetch, FILTER_VALIDATE_URL) || $isOurDownload) {
+            return null;
+        }
+        try {
+            $response = Http::withHeaders($headers)->timeout(60)->get($urlToFetch);
+            if (! $response->successful()) {
+                Log::warning('[DocConverterController] Failed to fetch result file from microservice', ['job_id' => $jobId, 'status' => $response->status(), 'url' => $urlToFetch]);
+                return null;
+            }
+            $body = $response->body();
+            $contentType = $response->header('Content-Type');
+            $extUsed = $this->extensionFromContentType($contentType) ?: $ext;
+            $fileId = $this->saveDocConverterOutput($request, $jobId, $body, $extUsed);
+            if (! $fileId) {
+                return null;
+            }
+            $responseData['file_id'] = $fileId;
+            $responseData['download_url'] = $ourDownloadUrlByFileId($fileId);
+            if (! empty($responseData['download_urls'])) {
+                $responseData['download_urls'] = [$ourDownloadUrlByFileId($fileId)];
+            }
+            return $responseData;
+        } catch (\Throwable $e) {
+            Log::warning('[DocConverterController] Exception fetching result file', ['job_id' => $jobId, 'error' => $e->getMessage(), 'url' => $urlToFetch]);
+            return null;
+        }
     }
 
     /**

@@ -541,12 +541,16 @@ class AIChatApiController extends Controller
 
         $jobId = $result['job_id'];
         $guestSession = ! $user ? $this->guestUserService->getGuestSessionFromRequest($request) : null;
-        Cache::put(self::DOC_CONVERTER_CACHE_PREFIX . $jobId, [
+        $cachePayload = [
             'user_id' => $user?->id,
             'guest_session_id' => $guestSession?->id,
             'chat_session_id' => $session->id,
             'operation' => $operation,
-        ], self::DOC_CONVERTER_CACHE_TTL);
+        ];
+        if ($operation === 'convert' && $targetFormat !== null && $targetFormat !== '') {
+            $cachePayload['target_format'] = $targetFormat;
+        }
+        Cache::put(self::DOC_CONVERTER_CACHE_PREFIX . $jobId, $cachePayload, self::DOC_CONVERTER_CACHE_TTL);
 
         $replyMsg = match ($operation) {
             'split' => 'Splitting your document. This may take a moment…',

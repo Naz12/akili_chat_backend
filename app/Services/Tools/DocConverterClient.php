@@ -24,10 +24,14 @@ class DocConverterClient
         }
 
         try {
+            // Microservice expects options as a JSON object string (dict). Plugins use options.get("key") so we must send "{}" not "[]".
             $response = Http::withHeaders($this->headers())
                 ->timeout($this->timeout())
                 ->attach('file', file_get_contents($filePath), basename($filePath))
-                ->post($url, array_merge(['target_format' => $targetFormat], $options));
+                ->post($url, [
+                    'target_format' => $targetFormat,
+                    'options' => json_encode((object) $options),
+                ]);
 
             $body = $response->json() ?? [];
             if (! $response->successful()) {

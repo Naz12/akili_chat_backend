@@ -149,7 +149,7 @@ if (isset($resultResp['success']) && $resultResp['success'] !== true) {
 }
 
 $data = $resultResp['data'] ?? [];
-$hasUrl = ! empty($data['download_url']) || ! empty($data['download_urls']);
+$hasUrl = ! empty($data['download_url']) || ! empty($data['download_urls']) || ! empty($data['file_id']);
 $hasContent = isset($data['content']) && (string) $data['content'] !== '';
 
 if ($status === 'completed') {
@@ -166,20 +166,31 @@ if ($status === 'completed') {
     echo "  OK: Job failed; result structure accepted.\n";
 }
 
-// ---- Step 5 (optional): If we have our download URL, verify it returns 200 via same app ----
+// ---- Step 5 (optional): If we have file_id or job download URL, verify download returns 200 ----
 if ($failed === 0 && $hasUrl && is_array($data)) {
-    $downloadUrl = $data['download_url'] ?? (is_array($data['download_urls'] ?? null) ? ($data['download_urls'][0] ?? null) : null);
-    if ($downloadUrl && str_contains($downloadUrl, '/doc-converter/download?')) {
-        echo "\nStep 5: Verify download endpoint returns 200...\n";
-        parse_str(parse_url($downloadUrl, PHP_URL_QUERY) ?: '', $params);
-        $jobIdForDownload = $params['job_id'] ?? null;
-        if ($jobIdForDownload) {
-            $dlResp = request('GET', $base . '/doc-converter/download?job_id=' . urlencode($jobIdForDownload), [], null, $token);
-            $dlStatus = $dlResp['_status'] ?? 0;
-            if ($dlStatus === 200) {
-                echo "  OK: Download endpoint returned 200.\n";
-            } else {
-                echo "  WARN: Download endpoint returned {$dlStatus}.\n";
+    echo "\nStep 5: Verify download endpoint returns 200...\n";
+    $fileId = $data['file_id'] ?? null;
+    if ($fileId) {
+        $dlResp = request('GET', $base . '/doc-converter/files/' . urlencode($fileId) . '/download', [], null, $token);
+        $dlStatus = $dlResp['_status'] ?? 0;
+        if ($dlStatus === 200) {
+            echo "  OK: File download (files/{id}) returned 200.\n";
+        } else {
+            echo "  WARN: File download returned {$dlStatus}.\n";
+        }
+    } else {
+        $downloadUrl = $data['download_url'] ?? (is_array($data['download_urls'] ?? null) ? ($data['download_urls'][0] ?? null) : null);
+        if ($downloadUrl && str_contains($downloadUrl, '/doc-converter/download?')) {
+            parse_str(parse_url($downloadUrl, PHP_URL_QUERY) ?: '', $params);
+            $jobIdForDownload = $params['job_id'] ?? null;
+            if ($jobIdForDownload) {
+                $dlResp = request('GET', $base . '/doc-converter/download?job_id=' . urlencode($jobIdForDownload), [], null, $token);
+                $dlStatus = $dlResp['_status'] ?? 0;
+                if ($dlStatus === 200) {
+                    echo "  OK: Download endpoint returned 200.\n";
+                } else {
+                    echo "  WARN: Download endpoint returned {$dlStatus}.\n";
+                }
             }
         }
     }
