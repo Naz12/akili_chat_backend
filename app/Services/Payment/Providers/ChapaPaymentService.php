@@ -14,13 +14,24 @@ class ChapaPaymentService implements PaymentServiceInterface
 
     public function __construct()
     {
-        $this->publicKey = config('services.chapa.public_key');
-        $this->secretKey = config('services.chapa.secret_key');
-        $this->baseUrl = config('services.chapa.base_url', 'https://api.chapa.co/v1');
+        $this->publicKey = (string) config('services.chapa.public_key', '');
+        $this->secretKey = (string) config('services.chapa.secret_key', '');
+        $this->baseUrl = rtrim((string) config('services.chapa.base_url', 'https://api.chapa.co/v1'), '/');
+    }
+
+    /** Throw if Chapa keys are not configured (avoids null assignment and gives a clear error when using payment). */
+    private function ensureConfigured(): void
+    {
+        if ($this->secretKey === '' || $this->publicKey === '') {
+            throw new \RuntimeException(
+                'Chapa payment is not configured. Set CHAPA_PUBLIC_KEY and CHAPA_SECRET_KEY in your .env file.'
+            );
+        }
     }
 
     public function createPayment(array $data): array
     {
+        $this->ensureConfigured();
         try {
             $amount = (float) $data['amount'];
             $currency = strtoupper($data['currency'] ?? 'ETB');
@@ -155,6 +166,7 @@ class ChapaPaymentService implements PaymentServiceInterface
 
     public function verifyPayment(string $reference): array
     {
+        $this->ensureConfigured();
         try {
             $response = Http::withHeaders([
                 'Authorization' => 'Bearer ' . $this->secretKey,

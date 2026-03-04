@@ -70,4 +70,18 @@ return [
         'url' => env('OPENAI_URL'),
         'key' => env('OPENAI_KEY'),
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Chapa payment provider
+    |--------------------------------------------------------------------------
+    | Get keys from https://dashboard.chapa.co/ (or use test keys for dev).
+    */
+    'chapa' => [
+        'public_key' => env('CHAPA_PUBLIC_KEY', ''),
+        'secret_key' => env('CHAPA_SECRET_KEY', ''),
+        'base_url' => rtrim((string) env('CHAPA_BASE_URL', 'https://api.chapa.co/v1'), '/'),
+        'webhook_secret' => env('CHAPA_WEBHOOK_SECRET'),
+        'require_signature' => (bool) env('CHAPA_REQUIRE_SIGNATURE', false),
+    ],
 ];
