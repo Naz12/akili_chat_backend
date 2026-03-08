@@ -73,7 +73,7 @@ class AIChatApiController extends Controller
 
         // Route by classified intent when confidence is high enough
         if ($intentType === 'presentation' && $confidence >= self::INTENT_CONFIDENCE_THRESHOLD) {
-            $presentationResult = $this->tryPresentationReply($message, $session, $user, true);
+            $presentationResult = $this->tryPresentationReply($message, $session, $user, true, $intent);
             if ($presentationResult !== null) {
                 return $this->sendToolReply($session, $user, $presentationResult);
             }
@@ -90,7 +90,7 @@ class AIChatApiController extends Controller
         }
 
         // Fallback: keyword-based detection (when classifier unavailable or returned general)
-        $presentationResult = $this->tryPresentationReply($message, $session, $user, false);
+        $presentationResult = $this->tryPresentationReply($message, $session, $user, false, $intent);
         if ($presentationResult !== null) {
             return $this->sendToolReply($session, $user, $presentationResult);
         }
@@ -312,9 +312,11 @@ class AIChatApiController extends Controller
     /**
      * If message looks like a presentation request, submit to tools/ppt async API and return job_id.
      * When $trustIntent is true (from classifier), skip keyword check.
+     * Uses intent entities (topic, slide_count) when provided; otherwise falls back to parseTopicAndSlides.
+     * Default slide count is 5 when user does not specify.
      * Returns ['reply' => string, 'reply_type' => 'presentation_outline', 'job_id' => string] or ['reply' => string] or null.
      */
-    private function tryPresentationReply(string $message, ChatSession $session, $user, bool $trustIntent = false): ?array
+    private function tryPresentationReply(string $message, ChatSession $session, $user, bool $trustIntent = false, array $intent = []): ?array
     {
         if (! $trustIntent) {
             $lower = strtolower($message);
@@ -328,14 +330,34 @@ class AIChatApiController extends Controller
             }
         }
 
-        [$topic, $numSlides] = PresentationService::parseTopicAndSlides($message);
+        $entities = $intent['entities'] ?? [];
+        $topicFromIntent = isset($entities['topic']) && trim((string) $entities['topic']) !== '' ? trim((string) $entities['topic']) : null;
+        $slideCountFromIntent = null;
+        if (isset($entities['slide_count'])) {
+            $n = (int) $entities['slide_count'];
+            if ($n >= 1 && $n <= 50) {
+                $slideCountFromIntent = $n;
+            }
+        }
+
+        if ($topicFromIntent !== null) {
+            $topic = $topicFromIntent;
+            $numSlides = $slideCountFromIntent ?? PresentationService::defaultSlideCount();
+        } else {
+            [$topic, $numSlides] = PresentationService::parseTopicAndSlides($message);
+            if ($slideCountFromIntent !== null) {
+                $numSlides = $slideCountFromIntent;
+            }
+        }
+
         if (trim($topic) === '') {
-            return ['reply' => 'Please specify a topic for the presentation (e.g. "presidents of the United States"). You can add "with 10 slides" or "15 slides" to set the number of slides (default is 10).'];
+            return ['reply' => 'Please specify a topic for the presentation (e.g. "presidents of the United States"). You can add "with 5 slides" or "10 slides" to set the number of slides (default is 5).'];
         }
 
         $client = app(PptMicroserviceClient::class);
-        $content = $topic . (\strlen($topic) > 0 ? ' ' : '') . "Generate an outline with {$numSlides} slides.";
-        $result = $client->submitOutline($content, 'English', 'Professional', 'Medium');
+        // Explicit instruction so the PPT microservice (or its LLM) respects slide count when num_slides is ignored
+        $content = "Generate an outline with exactly {$numSlides} slides. Topic: " . trim($topic);
+        $result = $client->submitOutline($content, 'English', 'Professional', 'Medium', $numSlides);
 
         if ($result['success'] && !empty($result['job_id'])) {
             return [
@@ -344,9 +366,15 @@ class AIChatApiController extends Controller
                 'job_id' => $result['job_id'],
                 'payload' => [
                     'step' => 1,
+                    'num_slides' => $numSlides,
                     'next_steps' => 'Poll GET presentations/status and result for outline → user may edit → POST presentations/generate-content with outline → poll for content → user may edit → GET presentations/templates → POST presentations/export with content + template/style.',
                 ],
             ];
+        }
+
+        // Microservice returned success but no job_id — avoid frontend stuck on "Generating..." with nothing to poll
+        if ($result['success'] && empty($result['job_id'])) {
+            return ['reply' => 'The presentation service did not return a job. Please try again in a moment.'];
         }
 
         return ['reply' => $result['error'] ?? 'Could not start presentation outline. Please try again.'];
@@ -784,10 +812,12 @@ class AIChatApiController extends Controller
         // Use same endpoint and auth as zooys: /api/custom-prompt + X-API-KEY
         if ($baseUrl && $key) {
             try {
+                $systemPrompt = 'Your name is Akili. When the user asks your name or who you are, respond that you are Akili. Always respond in English unless the user explicitly asks for another language.';
                 $body = [
                     'prompt' => $message,
                     'model' => $model,
                     'response_format' => 'text',
+                    'system_prompt' => $systemPrompt,
                 ];
                 if ($attachmentUrl) {
                     $body['attachment_url'] = $attachmentUrl;
@@ -827,11 +857,13 @@ class AIChatApiController extends Controller
         $openaiUrl = config('services.openai.url') ?? env('OPENAI_URL');
         if ($openaiKey && $openaiUrl) {
             try {
+                $systemPrompt = 'Your name is Akili. When the user asks your name or who you are, respond that you are Akili. Always respond in English unless the user explicitly asks for another language.';
                 $response = Http::withToken($openaiKey)
                     ->timeout(120)
                     ->post($openaiUrl, [
                         'model' => 'gpt-3.5-turbo',
                         'messages' => [
+                            ['role' => 'system', 'content' => $systemPrompt],
                             ['role' => 'user', 'content' => $message],
                         ],
                         'max_tokens' => 1024,

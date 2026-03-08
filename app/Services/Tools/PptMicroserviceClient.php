@@ -12,7 +12,12 @@ use Illuminate\Support\Facades\Log;
  */
 class PptMicroserviceClient
 {
-    public function submitOutline(string $content, string $language = 'English', string $tone = 'Professional', string $length = 'Medium'): array
+    /**
+     * Submit outline job to tools/ppt. If the microservice accepts num_slides, pass it; otherwise it may be inferred from content.
+     *
+     * @param  int|null  $numSlides  Optional. When provided, sent as num_slides in payload (if the endpoint supports it).
+     */
+    public function submitOutline(string $content, string $language = 'English', string $tone = 'Professional', string $length = 'Medium', ?int $numSlides = null): array
     {
         $url = $this->baseUrl() . '/generate-outline';
         $payload = [
@@ -21,6 +26,9 @@ class PptMicroserviceClient
             'tone' => $tone,
             'length' => $length,
         ];
+        if ($numSlides !== null && $numSlides >= 1 && $numSlides <= 50) {
+            $payload['num_slides'] = $numSlides;
+        }
         return $this->postJob($url, $payload);
     }
 

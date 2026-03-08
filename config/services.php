@@ -26,7 +26,7 @@ return [
         'api_key' => env('PRESENTATION_MICROSERVICE_API_KEY'),
         'timeout' => (int) env('PRESENTATION_MICROSERVICE_TIMEOUT', 300),
         'poll_timeout' => (int) env('PRESENTATION_POLL_TIMEOUT', 30),
-        'default_slides' => (int) env('PRESENTATION_DEFAULT_SLIDES', 10),
+        'default_slides' => (int) env('PRESENTATION_DEFAULT_SLIDES', 5),
         'outline_path' => '/generate-outline',
         'content_path' => '/generate-content',
         'export_path' => '/export',

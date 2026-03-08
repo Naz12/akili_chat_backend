@@ -52,13 +52,16 @@ class PresentationController extends Controller
             'language' => 'nullable|string|max:50',
             'tone' => 'nullable|string|max:50',
             'length' => 'nullable|string|max:50',
+            'num_slides' => 'nullable|integer|min:1|max:50',
         ]);
 
+        $numSlides = $request->has('num_slides') ? (int) $request->input('num_slides') : null;
         $result = $this->pptClient->submitOutline(
             $request->input('content'),
             $request->input('language', 'English'),
             $request->input('tone', 'Professional'),
-            $request->input('length', 'Medium')
+            $request->input('length', 'Medium'),
+            $numSlides
         );
 
         if (!$result['success']) {
@@ -212,18 +215,24 @@ class PresentationController extends Controller
 
         $result = $this->pptClient->getJobStatus($jobId);
         if (!$result['success']) {
-            return response()->json(['success' => false, 'error' => $result['error'] ?? 'Failed to get status.'], 502);
+            return response()->json(['success' => false, 'error' => $result['error'] ?? 'Failed to get status.', 'status' => 'failed'], 502);
         }
 
         $data = $result['data'] ?? [];
         $raw = $data['status'] ?? $result['status'] ?? 'unknown';
-        $status = ($raw === 'complete' || $raw === 'done') ? 'completed' : $raw;
-        return response()->json([
+        // Normalize so frontend gets a consistent status; "pending" treated as "queued"
+        $status = ($raw === 'complete' || $raw === 'done') ? 'completed' : (strtolower($raw) === 'pending' ? 'queued' : $raw);
+        $payload = [
             'success' => true,
             'status' => $status,
             'progress' => $data['progress'] ?? $result['progress'] ?? 0,
             'data' => $data,
-        ]);
+        ];
+        // Include error message when job failed so frontend can show it
+        if ($status === 'failed') {
+            $payload['error'] = $data['message'] ?? $data['error'] ?? $result['error'] ?? 'Job failed.';
+        }
+        return response()->json($payload);
     }
 
     /**

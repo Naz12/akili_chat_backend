@@ -106,7 +106,7 @@ You are an intent classifier for a smart AI assistant. Analyze the user's messag
 
 1. "youtube" - User wants to transcribe, summarize, or work with Yoube video content
 2. "document" - User wants to analyze, summarize, or chat about a document (PDF, DOC, etc.)
-3. "presentation" - User wants to create or generate a presentation, slides, or PPT (PowerPoint). Any request to "make a presentation", "create slides", "generate a PPT", "outline for a talk" etc.
+3. "presentation" - User wants to create or generate a presentation, slides, or PPT (PowerPoint). Any request to "make a presentation", "create slides", "generate a PPT", "outline for a talk" etc. Always separate the presentation topic from the user input into entities.topic. Fix grammar and spelling in the topic: correct typos (e.g. "pp" → PPT, "calture" → culture, "ethiopia" → Ethiopian), capitalize properly, and produce a clean topic suitable for a presentation title (e.g. "ethiopia calture" → "Ethiopian culture", "presdient donold j trump" → "President Donald J. Trump"). Slide count is OPTIONAL: set entities.slide_count only when the user explicitly provides a number of slides (e.g. "5 slides", "with 10 slides", "3 slipes"); do not set slide_count when the user does not specify a number. When set, slide_count must be an integer (1-50). Default when user does not specify is 5 (handled by backend).
 4. "diagram" - User wants to create or explain diagrams, flowcharts, charts, or visual representations. Includes: flowchart, mermaid, draw a diagram, visualize, pie chart, bar chart, "chart of X", "graph of Y". When intent is diagram, set entities.diagram_type to one of: flowchart, sequence, er, state, gantt, mindmap, pie, user_journey (or flowchart if unclear). For "pie chart of population", "chart of ethiopian population" use diagram_type "pie".
 5. "doc_converter" - User wants to convert, merge, split, extract, or run PDF operations on documents. Set entities.operation to one of: convert, extract, merge, split, compress, watermark, page_numbers, protect, unlock, preview, edit_pdf. For "convert" set entities.target_format when clear (e.g. jpg, png, pdf, docx, md). For "convert to text" or "extract text" use operation "extract". For "compress this PDF" use operation "compress". For "add watermark" or "watermark with X" use operation "watermark" and entities.watermark_content if stated. For "add page numbers" use operation "page_numbers". For "protect with password" use operation "protect" and entities.password if stated. For "unlock" or "remove password" use operation "unlock" and entities.password if stated. For "preview" or "thumbnails" use operation "preview". For "reorder pages" or "reverse pages" use operation "edit_pdf" and entities.page_order if stated (e.g. "reverse", "1,3,2").
 6. "multi_doc" - User wants to compare, contrast, or work with multiple documents
@@ -124,8 +124,20 @@ Examples:
 Input: "Can you summarize this video for me? https://youtube.com/watch?v=abc"
 Output: {"intent":"youtube","confidence":0.95,"reasoning":"YouTube URL detected","entities":{"url":"https://youtube.com/watch?v=abc"}}
 
+Input: "Generate a presentation about climate change"
+Output: {"intent":"presentation","confidence":0.95,"reasoning":"User wants a presentation; no slide count given","entities":{"topic":"climate change"}}
+
 Input: "Generate a presentation about climate change with 10 slides"
-Output: {"intent":"presentation","confidence":0.95,"reasoning":"User wants to create a presentation","entities":{"topic":"climate change"}}
+Output: {"intent":"presentation","confidence":0.95,"reasoning":"User wants a presentation with 10 slides","entities":{"topic":"climate change","slide_count":10}}
+
+Input: "generate a ppt about president donald j trump 5 slides"
+Output: {"intent":"presentation","confidence":0.95,"reasoning":"User wants a PPT with 5 slides","entities":{"topic":"president donald j trump","slide_count":5}}
+
+Input: "Generate a PPT about president donald j trump with 3 slipes"
+Output: {"intent":"presentation","confidence":0.95,"reasoning":"User wants a PPT; typo 'slipes' means slides","entities":{"topic":"President Donald J. Trump","slide_count":3}}
+
+Input: "generate a pp about ethiopia calture with 3 slides"
+Output: {"intent":"presentation","confidence":0.95,"reasoning":"User wants a PPT; fix grammar: pp→PPT, calture→culture, ethiopia→Ethiopian","entities":{"topic":"Ethiopian culture","slide_count":3}}
 
 Input: "Draw a flowchart for user login process"
 Output: {"intent":"diagram","confidence":0.9,"reasoning":"User wants a flowchart","entities":{"diagram_type":"flowchart"}}

@@ -51,16 +51,48 @@ $chatResp = api('POST', $base . '/chat', [
 
 $replyType = $chatResp['reply_type'] ?? null;
 $jobId = $chatResp['job_id'] ?? null;
+$payload = $chatResp['payload'] ?? [];
 $reply = $chatResp['reply'] ?? '';
 
 if ($replyType === 'presentation_outline' && !empty($jobId)) {
     echo "  OK: reply_type=presentation_outline, job_id={$jobId}\n";
+    $numSlides = $payload['num_slides'] ?? null;
+    if ($numSlides === 5) {
+        echo "  OK: payload.num_slides=5\n";
+    } else {
+        echo "  FAIL: expected payload.num_slides=5, got " . json_encode($numSlides) . "\n";
+        $failed++;
+    }
 } else {
     echo "  FAIL: expected reply_type=presentation_outline and job_id. Got: " . json_encode([
         'reply_type' => $replyType,
         'job_id' => $jobId,
         'reply_preview' => substr($reply, 0, 80),
     ], JSON_PRETTY_PRINT) . "\n";
+    $failed++;
+}
+
+// ---- Test 1b: PPT with 3 slides (grammar-fixed message) ----
+echo "\n=== Test 1b: Chat → Generate PPT (3 slides, 'pp about ethiopia calture') ===\n";
+$chatResp1b = api('POST', $base . '/chat', [
+    'message' => 'generate a pp about ethiopia calture with 3 slides',
+], $token);
+
+$replyType1b = $chatResp1b['reply_type'] ?? null;
+$jobId1b = $chatResp1b['job_id'] ?? null;
+$payload1b = $chatResp1b['payload'] ?? [];
+
+if ($replyType1b === 'presentation_outline' && !empty($jobId1b)) {
+    echo "  OK: reply_type=presentation_outline, job_id={$jobId1b}\n";
+    $numSlides1b = $payload1b['num_slides'] ?? null;
+    if ($numSlides1b === 3) {
+        echo "  OK: payload.num_slides=3 (slide count correct)\n";
+    } else {
+        echo "  FAIL: expected payload.num_slides=3, got " . json_encode($numSlides1b) . "\n";
+        $failed++;
+    }
+} else {
+    echo "  FAIL: expected presentation_outline + job_id. Got reply_type=" . ($replyType1b ?? 'null') . ", job_id=" . ($jobId1b ?? 'null') . "\n";
     $failed++;
 }
 

@@ -7,17 +7,25 @@ use Illuminate\Support\Facades\Log;
 
 /**
  * Calls the presentation (PPT) microservice to generate outline and slides.
- * Uses default of 10 slides; user can override by specifying a number in the topic/message.
+ * Default is 5 slides when user does not specify; user can override by specifying a number in the topic/message.
  */
 class PresentationService
 {
-    private const DEFAULT_SLIDES = 10;
+    private const DEFAULT_SLIDES = 5;
+
+    /**
+     * Default number of slides when user does not specify. Uses config or DEFAULT_SLIDES.
+     */
+    public static function defaultSlideCount(): int
+    {
+        return (int) config('services.presentation.default_slides', self::DEFAULT_SLIDES);
+    }
 
     /**
      * Generate presentation outline from the PPT microservice.
      *
      * @param string $topic User topic (e.g. "presidents of the United States of America")
-     * @param int|null $numSlides If null, uses default (10). User can override via parseTopicAndSlides().
+     * @param int|null $numSlides If null, uses default (5). User can override via parseTopicAndSlides().
      * @return array{success: bool, outline?: array, message?: string, slides?: array}
      */
     public function generateOutline(string $topic, ?int $numSlides = null): array
@@ -111,7 +119,7 @@ class PresentationService
             'topic' => $topic,
             'outline' => $outlineResult['outline'] ?? [],
             'outline_id' => $outlineResult['outline_id'] ?? null,
-            'num_slides' => $outlineResult['num_slides'] ?? 10,
+            'num_slides' => $outlineResult['num_slides'] ?? self::defaultSlideCount(),
         ];
 
         try {
@@ -156,7 +164,7 @@ class PresentationService
             'outline' => $outlineResult['outline'] ?? [],
             'outline_id' => $outlineResult['outline_id'] ?? null,
             'content' => $contentResult['content'] ?? $contentResult['slides'] ?? [],
-            'num_slides' => $outlineResult['num_slides'] ?? 10,
+            'num_slides' => $outlineResult['num_slides'] ?? self::defaultSlideCount(),
         ];
 
         try {
@@ -238,7 +246,7 @@ class PresentationService
     /**
      * Parse user message to extract topic and optional slide count.
      * Examples:
-     *   "presidents of the United States" -> ['presidents of the United States', 10]
+     *   "presidents of the United States" -> ['presidents of the United States', 5]
      *   "US presidents, 15 slides" -> ['US presidents', 15]
      *   "make a ppt about X with 7 slides" -> ['make a ppt about X', 7]
      *
